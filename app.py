@@ -1,28 +1,37 @@
+from flask import Flask, request, jsonify
+import requests
+import os
+import json
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Sleep Planner is live!"
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.json
         print("Webhook received:", json.dumps(data, indent=2))
 
-        # Extract email and other fields
+        # Extract relevant fields
         fields = data["data"]["fields"]
         values = {f["label"].strip(): f["value"] for f in fields if "value" in f}
-        print("Extracted values:", values)
 
         start_time = values.get("What time do you usually start your shift?")
         end_time = values.get("What time does your shift end?")
         challenge = values.get("What’s your biggest sleep challenge right now?")
         email = values.get("Enter your email to receive your personalized plan")
 
-        # Validate required fields
         if not email:
             return "Missing email", 400
 
         prompt = f"""
-        Create a personalized night shift sleep optimization plan.
+        Create a personalized sleep plan for a night shift worker.
         Shift starts at {start_time} and ends at {end_time}.
-        Main sleep issue: {challenge}.
-        Make it practical and easy to follow.
+        Main sleep challenge: {challenge}.
+        Make it practical, helpful, and tailored to shift workers.
         """
 
         print("Sending to GPT:", prompt)
@@ -53,3 +62,6 @@ def webhook():
     except Exception as e:
         print("Error occurred:", e)
         return "Internal Server Error", 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
