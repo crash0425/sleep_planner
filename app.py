@@ -1,59 +1,55 @@
-from flask import Flask, request, jsonify
-import openai
-import os
-
-app = Flask(__name__)
-
-# Replace with your real OpenAI API key
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-def extract_answer(fields, question_key):
-    for field in fields:
-        if field.get("key") == question_key:
-            return field.get("value")
-    return None
-
-@app.route("/", methods=["GET"])
-def home():
-    return "🧠 AI Sleep Planner is live!"
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.json
+        print("Webhook received:", json.dumps(data, indent=2))
+
+        # Extract email and other fields
         fields = data["data"]["fields"]
+        values = {f["label"].strip(): f["value"] for f in fields if "value" in f}
+        print("Extracted values:", values)
 
-        start_time = extract_answer(fields, "question_VPbyQ6")
-        end_time = extract_answer(fields, "question_P9by1x")
-        challenge = extract_answer(fields, "question_rOJWaX")
-        email = extract_answer(fields, "question_479dJ5")
+        start_time = values.get("What time do you usually start your shift?")
+        end_time = values.get("What time does your shift end?")
+        challenge = values.get("What’s your biggest sleep challenge right now?")
+        email = values.get("Enter your email to receive your personalized plan")
 
-        # Convert checkbox values (days of week)
-        work_days = []
-        for field in fields:
-            if field["key"].startswith("question_ElZYd2_") and field["value"] == True:
-                day = field["label"].split("(")[-1].replace(")", "").strip()
-                work_days.append(day)
+        # Validate required fields
+        if not email:
+            return "Missing email", 400
 
-        # Format the prompt
         prompt = f"""
-        I am a night shift worker. I work from {start_time} to {end_time} on {', '.join(work_days)}.
-        My biggest sleep challenge is: {challenge}.
-        Create a personalized weekly sleep schedule to help me feel rested.
+        Create a personalized night shift sleep optimization plan.
+        Shift starts at {start_time} and ends at {end_time}.
+        Main sleep issue: {challenge}.
+        Make it practical and easy to follow.
         """
 
-        # Call GPT
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500
+        print("Sending to GPT:", prompt)
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1000
+            }
         )
 
-        plan = response["choices"][0]["message"]["content"]
-        return f"<h2>Your Personalized AI Sleep Plan</h2><pre>{plan}</pre>"
+        gpt_data = response.json()
+        print("GPT response:", json.dumps(gpt_data, indent=2))
+
+        plan = gpt_data["choices"][0]["message"]["content"]
+
+        return jsonify({
+            "email": email,
+            "plan": plan
+        })
 
     except Exception as e:
-        return f"Error: {str(e)}", 500
-
-if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=10000)
+        print("Error occurred:", e)
+        return "Internal Server Error", 500
