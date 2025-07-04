@@ -1,64 +1,59 @@
 from flask import Flask, request, jsonify
+import openai
 import os
-import requests
 
 app = Flask(__name__)
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+# Set your OpenAI API key here
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-@app.route("/")
-def home():
-    return "Sleep Planner is running!"
+@app.route("/", methods=["GET"])
+def index():
+    return "Shift Sleep Planner is running."
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json()
+        data = request.json
         fields = data.get("data", {}).get("fields", [])
 
-        start_time = next((f["value"] for f in fields if "start" in f["label"].lower()), None)
-        end_time = next((f["value"] for f in fields if "end" in f["label"].lower()), None)
-        sleep_issue = next((f["value"][0] if isinstance(f["value"], list) else f["value"]
-                           for f in fields if "sleep challenge" in f["label"].lower()), None)
-        email = next((f["value"] for f in fields if "email" in f["label"].lower()), None)
+        # Extract form data
+        shift_start = get_field_value(fields, "question_VPbyQ6")
+        shift_end = get_field_value(fields, "question_P9by1x")
+        challenge = get_field_value(fields, "question_rOJWaX")
+        email = get_field_value(fields, "question_479dJ5")
 
-        prompt = f"""You are an expert sleep coach. Create a night shift sleep optimization plan.
-        - Shift Start: {start_time}
-        - Shift End: {end_time}
-        - Main Issue: {sleep_issue}
-        Output a bullet list plan."""
+        # Build the AI prompt
+        prompt = f"""
+        I work a night shift from {shift_start} to {shift_end}. My biggest sleep issue is: {challenge}.
+        Generate a personalized, science-backed sleep optimization plan.
+        Include timing for wind-down, light exposure, meals, and ideal sleep hours.
+        """
 
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-            json={
-                "model": "mistralai/mixtral-8x7b",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 500
-            }
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a sleep expert for night shift workers."},
+                {"role": "user", "content": prompt}
+            ]
         )
 
-        sleep_plan = response.json()["choices"][0]["message"]["content"]
+        plan = response["choices"][0]["message"]["content"]
 
-        # Send the sleep plan back to the user
-        send_email(email, "Your Night Shift Sleep Plan", sleep_plan)
+        # For now, return the plan in response
+        return jsonify({"plan": plan, "email": email})
 
-        return jsonify({"message": "Success", "plan": sleep_plan})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e)})
 
-import smtplib
-from email.message import EmailMessage
 
-def send_email(to, subject, content):
-    msg = EmailMessage()
-    msg.set_content(content)
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_ADDRESS
-    msg["To"] = to
+def get_field_value(fields, key):
+    for field in fields:
+        if field.get("key") == key:
+            return field.get("value") or field.get("value", [None])[0]
+    return None
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        smtp.send_message(msg)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
