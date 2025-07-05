@@ -1,73 +1,81 @@
 import os
-import smtplib
-from email.mime.text import MIMEText
 from flask import Flask, request, jsonify
 import openai
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import logging
 
+# Load environment variables
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+EMAIL_ADDRESS = os.environ.get("EMAIL_ADDRESS")  # Your Gmail address
+EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")  # Gmail App Password
+
+# Flask setup
 app = Flask(__name__)
 
-# ENV VARS REQUIRED: OPENAI_API_KEY, GMAIL_ADDRESS, GMAIL_APP_PASSWORD
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Logging
+logging.basicConfig(level=logging.INFO)
 
-# Util: send email
-def send_email(to_email, subject, body):
-    gmail_user = os.getenv("GMAIL_ADDRESS")
-    gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
-
-    msg = MIMEText(body, "plain")
-    msg["Subject"] = subject
-    msg["From"] = gmail_user
-    msg["To"] = to_email
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(gmail_user, gmail_pass)
-        smtp.send_message(msg)
-
-# Util: create prompt from form data
-def generate_prompt(shift_start, shift_end, workdays, sleep_issues):
-    days = ", ".join(workdays)
-    issue = sleep_issues if isinstance(sleep_issues, str) else ", ".join(sleep_issues)
-    return (
-        f"I work the night shift from {shift_start} to {shift_end}, "
-        f"on the following days: {days}. "
-        f"My biggest sleep challenge is: {issue}. "
-        f"Please create a personalized sleep routine and health guide tailored to my situation."
-    )
-
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
-    return "Sleep Planner is running!"
+    return "✅ Sleep Planner Webhook is running!"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.json
-    fields = {f["key"]: f for f in data["data"]["fields"]}
+    try:
+        data = request.get_json()
+        logging.info("✅ Full incoming JSON: %s", data)
 
-    # Extract form fields
-    shift_start = fields["question_VPbyQ6"]["value"]
-    shift_end = fields["question_P9by1x"]["value"]
-    workdays = fields["question_ElZYd2"]["value"]
-    sleep_issues = fields["question_rOJWaX"]["options"][0]["text"]  # Assuming only one selected
-    email = fields["question_479dJ5"]["value"]
+        fields = {field["label"].strip(): field["value"] for field in data["data"]["fields"]}
 
-    # Generate GPT sleep plan
-    prompt = generate_prompt(shift_start, shift_end, workdays, sleep_issues)
-    print(f"🧠 Prompt: {prompt}")
+        start_time = fields.get("What time do you usually start your shift?")
+        end_time = fields.get("What time does your shift end?")
+        days = fields.get("What days of the week do you work?")
+        challenge = fields.get("What’s your biggest sleep challenge right now?")
+        email = fields.get("Enter your email to receive your personalized plan")
 
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    sleep_plan = response.choices[0].message.content
+        prompt = f"""
+        You are a sleep coach. Create a personalized sleep plan for someone who works night shifts.
 
-    # Email the sleep plan
-    send_email(
-        to_email=email,
-        subject="Your Personalized AI Sleep Plan",
-        body=sleep_plan
-    )
+        Shift: {start_time} to {end_time}
+        Workdays: {days}
+        Main issue: {challenge}
+        """
 
-    return jsonify({"status": "success", "message": "Email sent!"})
+        logging.info("📅 Shift: %s - %s", start_time, end_time)
+        logging.info("🗓️ Workdays: %s", days)
+        logging.info("😴 Issue: %s", challenge)
+        logging.info("📧 Email: %s", email)
 
-if __name__ == "__main__":
-    app.run(debug=True, port=10000)
+        # Call OpenAI
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful sleep coach."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        reply = response["choices"][0]["message"]["content"]
+        logging.info("✅ GPT Response: %s", reply)
+
+        # Send email with Gmail App Password
+        send_email(to=email, subject="Your Personalized AI Sleep Plan", body=reply)
+
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        logging.error("❌ ERROR: %s", str(e))
+        return jsonify({"error": str(e)}), 500
+
+def send_email(to, subject, body):
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_ADDRESS
+    msg["To"] = to
+    msg["Subject"] = subject
+
+    msg.attach(MIMEText(body, "plain"))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        ser
