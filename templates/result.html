@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Your Personalized Night Shift Sleep Plan</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f4f6f8;
+      color: #333;
+    }
+    .container {
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 2rem;
+      background-color: #fff;
+      border-radius: 12px;
+      box-shadow: 0 0 12px rgba(0,0,0,0.1);
+    }
+    h1 {
+      text-align: center;
+      color: #1e2e3e;
+    }
+    .summary {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      background-color: #f0f4f8;
+      border-left: 4px solid #0077cc;
+    }
+    .plan {
+      white-space: pre-wrap;
+      font-size: 1rem;
+      line-height: 1.6;
+      margin: 2rem 0;
+    }
+    .button-container {
+      text-align: center;
+      margin-top: 2rem;
+    }
+    .button {
+      background-color: #0077cc;
+      color: white;
+      padding: 1rem 2rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 1.1rem;
+      text-decoration: none;
+    }
+    .button:hover {
+      background-color: #005fa3;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🛏️ Your Personalized Sleep Plan</h1>
+    <div class="summary">
+      <p><strong>Shift:</strong> {{ shift_start }} – {{ shift_end }}</p>
+      <p><strong>Workdays:</strong> {{ workdays|join(", ") }}</p>
+      <p><strong>Sleep Issue:</strong> {{ issue }}</p>
+      <p><strong>Email:</strong> {{ email }}</p>
+    </div>
+
+    <div class="plan">
+      {{ plan }}
+    </div>
+
+    <div class="button-container">
+      <a class="button" href="{{ pdf_url }}" download>📄 Download PDF</a>
+    </div>
+  </div>
+</body>
+</html>
