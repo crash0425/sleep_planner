@@ -1,86 +1,71 @@
-from flask import Flask, request, jsonify, render_template
 import os
-import openai
+from flask import Flask, request, render_template, send_file
+from dotenv import load_dotenv
+from openai import OpenAI
+from weasyprint import HTML
+import tempfile
+
+load_dotenv()
 
 app = Flask(__name__)
-
-# Set OpenAI key
-openai.api_key = os.environ.get("OPENAI_API_KEY")
-
-# In-memory store of plans keyed by respondentId
-sleep_plans = {}
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Sleep Planner is live!"
+    return "Sleep Plan Generator is running."
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json(force=True)
+        data = request.get_json()
         print("✅ Full incoming JSON:", data)
 
-        fields = data["data"]["fields"]
+        fields = {f['label'].strip(): f['value'] for f in data['data']['fields']}
+        shift_start = fields.get("What time do you usually start your shift?")
+        shift_end = fields.get("What time does your shift end?")
+        workdays = fields.get("What days of the week do you work?", [])
+        issue_id = fields.get("What’s your biggest sleep challenge right now?")[0]
+        email = fields.get("Enter your email to receive your personalized plan")
 
-        shift_start = next((f["value"] for f in fields if f["key"] == "question_VPbyQ6"), "00:00")
-        shift_end = next((f["value"] for f in fields if f["key"] == "question_P9by1x"), "08:00")
+        # Map issue ID to text
+        issue_map = {
+            "ae2dc1d9-16e7-4643-8af2-7349da2fd10a": "Falling asleep",
+            "abc0482e-ddbe-4411-b672-91c12c7e96d5": "Staying asleep",
+            "bc9c0553-5505-4bec-a453-de6cebccf457": "Waking too early",
+            "1e69b4d3-76e7-4a6d-a298-0aca371fcf9a": "All of the above"
+        }
+        sleep_issue = issue_map.get(issue_id, "Not specified")
 
-        workdays_field = next((f for f in fields if f["key"] == "question_ElZYd2"), {})
-        all_options = workdays_field.get("options", [])
-        selected_ids = set(workdays_field.get("value", []))
-        workdays = [opt["text"] for opt in all_options if opt["id"] in selected_ids]
+        prompt = f"""
+        Act as a sleep optimization expert. Given the user's shift starts at {shift_start}, ends at {shift_end}, works on {workdays}, and their biggest sleep issue is: {sleep_issue}, create a personalized sleep plan.
+        """
 
-        issue_field = next((f for f in fields if f["key"] == "question_rOJWaX"), {})
-        selected_issue_id = issue_field.get("value", [None])[0]
-        issue_text = next((opt["text"] for opt in issue_field.get("options", []) if opt["id"] == selected_issue_id), "Not specified")
-
-        email = next((f["value"] for f in fields if f["key"] == "question_479dJ5"), "unknown")
-
-        respondent_id = data["data"]["respondentId"]
-
-        print("📅 Shift:", shift_start, "-", shift_end)
-        print("🗓️ Workdays:", workdays)
-        print("😴 Issue:", issue_text)
-        print("📧 Email:", email)
-
-        prompt = f"""You are a sleep expert. Create a personalized sleep plan for a night shift worker.
-Shift: {shift_start} to {shift_end}
-Workdays: {', '.join(workdays)}
-Main issue: {issue_text}
-
-Give a clear daily sleep routine, advice for winding down, and how to reset on off days."""
-
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a helpful sleep optimization expert."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=800
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
         )
 
-        result = response.choices[0].message.content
-        print("✅ GPT Response:", result)
+        plan = response.choices[0].message.content.strip()
 
-        # Store sleep plan
-        sleep_plans[respondent_id] = {
-            "plan": result,
-            "email": email
-        }
+        print("✅ GPT Response:", plan)
 
-        return jsonify({"status": "success", "link": f"/plan/{respondent_id}"})
+        # Save to temp HTML file for rendering
+        with open("templates/plan.html", "w", encoding="utf-8") as f:
+            f.write(render_template("plan_template.html", plan=plan))
+
+        return render_template("plan_template.html", plan=plan)
 
     except Exception as e:
-        print("❌ ERROR:", str(e))
-        return jsonify({"error": str(e)}), 500
+        print("❌ ERROR:", e)
+        return "Something went wrong", 500
 
-@app.route("/plan/<respondent_id>", methods=["GET"])
-def show_plan(respondent_id):
-    plan_data = sleep_plans.get(respondent_id)
-    if not plan_data:
-        return "Plan not found", 404
-    return render_template("plan.html", plan=plan_data["plan"], email=plan_data["email"])
+@app.route("/download-pdf", methods=["GET"])
+def download_pdf():
+    html = HTML("templates/plan.html")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+        html.write_pdf(f.name)
+        return send_file(f.name, as_attachment=True, download_name="sleep-plan.pdf")
 
 if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=10000)
+    app.run(debug=True, port=10000)
