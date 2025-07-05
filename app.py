@@ -1,150 +1,120 @@
 import os
-import json
-from flask import Flask, request, render_template_string, send_file
-from datetime import datetime
-from io import BytesIO
-from jinja2 import Template
+from flask import Flask, request, abort, render_template_string
+from dotenv import load_dotenv
+import openai
 from weasyprint import HTML
+from datetime import datetime
+
+load_dotenv()
 
 app = Flask(__name__)
 
+# Environment variables
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TALLY_SECRET = os.getenv("TALLY_SECRET")
+
+openai.api_key = OPENAI_API_KEY
+
+# HTML template with download button
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your Personalized Sleep Plan</title>
+    <title>Your Night Shift Sleep Plan</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            background: #f4f7f9;
-            margin: 0;
-            padding: 2rem;
-        }
-        .container {
-            background: white;
-            border-radius: 10px;
-            padding: 2rem;
-            max-width: 700px;
-            margin: auto;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #2b2d42;
-        }
-        p, li {
-            font-size: 16px;
-            line-height: 1.6;
-        }
-        .section {
-            margin-bottom: 2rem;
-        }
-        .download {
-            text-align: center;
-            margin-top: 2rem;
-        }
-        .download a {
-            display: inline-block;
-            background: #007bff;
+            background-color: #0c1b2a;
             color: white;
-            padding: 0.75rem 1.5rem;
-            border-radius: 5px;
-            text-decoration: none;
-            transition: background 0.3s;
+            max-width: 800px;
+            margin: auto;
+            padding: 40px;
         }
-        .download a:hover {
-            background: #0056b3;
+        h1 { color: #00d4ff; }
+        .container { background-color: #112d42; padding: 20px; border-radius: 10px; }
+        a.download-button {
+            display: inline-block;
+            background-color: #00d4ff;
+            color: #0c1b2a;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+            margin-top: 20px;
         }
     </style>
 </head>
 <body>
+    <h1>Your Personalized Sleep Plan</h1>
     <div class="container">
-        <h1>Your Personalized Sleep Plan</h1>
-        <div class="section">
-            <strong>📅 Shift:</strong> {{ shift_start }} - {{ shift_end }}<br>
-            <strong>🗓️ Workdays:</strong> {{ workdays|join(", ") }}<br>
-            <strong>😴 Issue:</strong> {{ issue }}<br>
-            <strong>📧 Email:</strong> {{ email }}
-        </div>
-        <div class="section">
-            {{ response|safe }}
-        </div>
-        <div class="download">
-            <a href="/download/{{ response_id }}" target="_blank">Download as PDF</a>
-        </div>
+        <p>{{ plan | safe }}</p>
     </div>
+    <a class="download-button" href="/download?text={{ plan|urlencode }}" target="_blank">⬇️ Download PDF</a>
 </body>
 </html>
 """
 
-responses = {}
+@app.route("/", methods=["GET"])
+def index():
+    return "👋 Sleep Planner is running!"
 
-def generate_sleep_plan(shift_start, shift_end, workdays, issue):
-    # Placeholder logic – customize as needed
-    return f"""
-    <h2>Sleep Routine</h2>
-    <ul>
-        <li>Sleep between {shift_end} and 21:00 (9:00 PM) to get 8 hours of sleep.</li>
-        <li>Try to keep this consistent even on your off days: {', '.join(workdays)}.</li>
-        <li>Your biggest challenge is: <strong>{issue}</strong>.</li>
-    </ul>
-    <h2>Winding Down</h2>
-    <ul>
-        <li>Create a dark, quiet, cool room to sleep.</li>
-        <li>Use earplugs, blackout curtains, and white noise if needed.</li>
-        <li>Have a relaxing routine before sleep like reading, warm bath, or gentle music.</li>
-    </ul>
-    <h2>Resetting on Off Days</h2>
-    <ul>
-        <li>Use bright light when awake and avoid screens before bed.</li>
-        <li>Eat light at night and avoid caffeine before sleep.</li>
-    </ul>
-    """
-
-@app.route('/webhook', methods=['POST'])
+@app.route("/webhook", methods=["POST"])
 def webhook():
+    # Validate Tally webhook secret
+    incoming_secret = request.headers.get("X-Tally-Secret")
+    if TALLY_SECRET and incoming_secret != TALLY_SECRET:
+        abort(403)
+
     data = request.get_json()
-    print("✅ Full incoming JSON:", json.dumps(data, indent=2))
+    fields = data.get("data", {}).get("fields", [])
 
-    fields = {field['label'].strip(): field['value'] for field in data['data']['fields'] if 'value' in field}
+    # Extract values
+    start = next((f["value"] for f in fields if "start" in f["label"].lower()), None)
+    end = next((f["value"] for f in fields if "end" in f["label"].lower()), None)
+    email = next((f["value"] for f in fields if "email" in f["label"].lower()), None)
+    days = []
+    for f in fields:
+        if "days" in f["label"].lower() and isinstance(f["value"], list):
+            options = f.get("options", [])
+            days = [o["text"] for o in options if o["id"] in f["value"]]
+            break
+    issue = next((f.get("options", [{}])[0]["text"] for f in fields if "challenge" in f["label"].lower()), "N/A")
 
-    shift_start = fields.get('What time do you usually start your shift?')
-    shift_end = fields.get('What time does your shift end?')
-    workdays = fields.get('What days of the week do you work?', [])
-    issue = fields.get('What’s your biggest sleep challenge right now?', [])[0] if isinstance(fields.get('What’s your biggest sleep challenge right now?'), list) else ''
-    email = fields.get('Enter your email to receive your personalized plan')
-    response_id = data['data']['responseId']
-
-    response_html = generate_sleep_plan(shift_start, shift_end, workdays, issue)
-
-    html = Template(HTML_TEMPLATE).render(
-        shift_start=shift_start,
-        shift_end=shift_end,
-        workdays=workdays,
-        issue=issue,
-        email=email,
-        response=response_html,
-        response_id=response_id
+    # Format prompt
+    prompt = (
+        f"You are a sleep specialist helping night shift workers. "
+        f"Their shift is from {start} to {end}. "
+        f"They work on: {', '.join(days)}. "
+        f"Their biggest sleep challenge is: {issue}. "
+        f"Create a 3-part personalized sleep plan that includes (1) a sleep schedule, (2) tips to improve rest, and (3) advice for resetting on off days. "
+        f"Be warm, practical, and avoid generic advice."
     )
 
-    responses[response_id] = html
+    # Call OpenAI
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    sleep_plan = response.choices[0].message.content
 
-    return html
+    return render_template_string(HTML_TEMPLATE, plan=sleep_plan)
 
-@app.route('/download/<response_id>')
-def download(response_id):
-    html_content = responses.get(response_id)
-    if not html_content:
-        return "Not found", 404
+@app.route("/download", methods=["GET"])
+def download_pdf():
+    text = request.args.get("text", "")
+    if not text:
+        abort(400)
+    html = render_template_string(HTML_TEMPLATE, plan=text)
+    pdf = HTML(string=html).write_pdf()
+    return (
+        pdf,
+        200,
+        {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": f"attachment; filename=sleep-plan-{datetime.utcnow().isoformat()}.pdf",
+        },
+    )
 
-    pdf = HTML(string=html_content).write_pdf()
-    return send_file(BytesIO(pdf), download_name="sleep_plan.pdf", as_attachment=True)
-
-@app.route('/')
-def index():
-    return "<h1>Sleep Plan Generator is Live</h1>"
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    app.run(debug=True, port=10000)
