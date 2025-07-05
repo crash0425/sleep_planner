@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 
-# Download the wkhtmltopdf Linux binary
-curl -L https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox-0.12.6-1.linux-generic-amd64.tar.xz > wkhtmltox.tar.xz
+# Exit on error
+set -o errexit
 
-# Extract it
-tar -xf wkhtmltox.tar.xz
+# Install WeasyPrint dependencies
+apt-get update
+apt-get install -y \
+    build-essential \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libcairo2 \
+    libgdk-pixbuf2.0-0 \
+    libffi-dev \
+    libxml2 \
+    libxslt1.1 \
+    libjpeg-dev \
+    zlib1g-dev \
+    libssl-dev \
+    libpq-dev \
+    python3-dev \
+    curl
 
-# Move the binary to a place Render can access
-mv wkhtmltox/bin/wkhtmltopdf /usr/local/bin/
-chmod +x /usr/local/bin/wkhtmltopdf
+echo "✅ System dependencies for WeasyPrint installed"
+
