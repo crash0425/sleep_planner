@@ -4,7 +4,7 @@ import openai
 
 app = Flask(__name__)
 
-# Set your API key from environment variable
+# Use API key from environment
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 @app.route("/", methods=["GET"])
@@ -14,13 +14,12 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        # Try to parse the incoming JSON
         data = request.get_json(force=True)
         print("✅ Full incoming JSON:", data)
 
         fields = data["data"]["fields"]
 
-        # Extract values safely
+        # Parse Tally data fields
         shift_start = next((f["value"] for f in fields if f["key"] == "question_VPbyQ6"), "00:00")
         shift_end = next((f["value"] for f in fields if f["key"] == "question_P9by1x"), "08:00")
         workdays = [f["label"].split(" (")[-1].replace(")", "") 
@@ -34,7 +33,7 @@ def webhook():
         print("😴 Issue:", sleep_issue)
         print("📧 Email:", email)
 
-        # Construct prompt
+        # Create prompt
         prompt = f"""You are a sleep expert. Create a personalized sleep plan for a night shift worker.
 Shift: {shift_start} to {shift_end}
 Workdays: {', '.join(workdays)}
@@ -43,8 +42,10 @@ Main issue: {sleep_issue}
 Give a clear daily sleep routine, advice for winding down, and how to reset on off days.
 """
 
-        # Ask GPT-4 (or GPT-3.5)
-        response = openai.ChatCompletion.create(
+        # Use new OpenAI SDK format
+        client = openai.OpenAI(api_key=openai.api_key)
+
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful sleep optimization expert."},
@@ -54,7 +55,7 @@ Give a clear daily sleep routine, advice for winding down, and how to reset on o
             temperature=0.7
         )
 
-        result = response['choices'][0]['message']['content']
+        result = response.choices[0].message.content
         print("✅ GPT Response:", result)
 
         return jsonify({"status": "success", "plan": result})
