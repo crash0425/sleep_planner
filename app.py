@@ -1,20 +1,12 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import os
 import openai
-import smtplib
-from email.mime.text import MIMEText
 
 app = Flask(__name__)
-
-# Set your OpenAI API key
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-# Email config from environment
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
-SMTP_USER = os.environ.get("SMTP_USER")  # your Gmail address
-SMTP_PASS = os.environ.get("SMTP_PASS")  # your Gmail App Password
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL", SMTP_USER)
+# In-memory store for plans (replace with a database in production)
+plans = {}
 
 @app.route("/", methods=["GET"])
 def home():
@@ -42,12 +34,6 @@ def webhook():
 
         email = next((f["value"] for f in fields if f["key"] == "question_479dJ5"), "unknown")
 
-        print("📅 Shift:", shift_start, "-", shift_end)
-        print("🗓️ Workdays:", workdays)
-        print("😴 Issue:", issue_text)
-        print("📧 Email:", email)
-
-        # Construct OpenAI prompt
         prompt = f"""You are a sleep expert. Create a personalized sleep plan for a night shift worker.
 Shift: {shift_start} to {shift_end}
 Workdays: {', '.join(workdays)}
@@ -55,7 +41,6 @@ Main issue: {issue_text}
 
 Give a clear daily sleep routine, advice for winding down, and how to reset on off days."""
 
-        # GPT-4 call
         response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
@@ -69,24 +54,29 @@ Give a clear daily sleep routine, advice for winding down, and how to reset on o
         result = response.choices[0].message.content
         print("✅ GPT Response:", result)
 
-        # Email setup
-        msg = MIMEText(result)
-        msg["Subject"] = "Your Personalized AI Sleep Plan"
-        msg["From"] = SENDER_EMAIL
-        msg["To"] = email
+        # Save plan under respondent ID
+        respondent_id = data["data"]["respondentId"]
+        plans[respondent_id] = result
 
-        # Send via Gmail SMTP
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.send_message(msg)
-
-        print("✅ Email sent successfully to", email)
-        return jsonify({"status": "success", "plan": result})
+        # Return a URL with the respondent ID to view the plan
+        return jsonify({"status": "success", "url": f"/plan/{respondent_id}"})
 
     except Exception as e:
         print("❌ ERROR:", str(e))
         return jsonify({"error": str(e)}), 500
+
+@app.route("/plan/<respondent_id>")
+def show_plan(respondent_id):
+    plan = plans.get(respondent_id, "No plan found.")
+    return render_template_string(f"""
+    <html>
+      <head><title>Your Sleep Plan</title></head>
+      <body style="font-family:sans-serif; padding: 20px;">
+        <h2>Your Personalized Sleep Plan</h2>
+        <pre style="white-space: pre-wrap;">{plan}</pre>
+      </body>
+    </html>
+    """)
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=10000)
