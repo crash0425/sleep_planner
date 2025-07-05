@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your Personalized AI Sleep Plan</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 800px;
+      margin: 40px auto;
+      background: #fff;
+      padding: 40px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      border-radius: 8px;
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 20px;
+    }
+    .meta {
+      font-size: 14px;
+      color: #777;
+      margin-bottom: 30px;
+    }
+    pre {
+      white-space: pre-wrap;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    .btn {
+      display: inline-block;
+      margin-top: 30px;
+      padding: 10px 20px;
+      background: #007bff;
+      color: white;
+      text-decoration: none;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Your Personalized AI Sleep Plan</h1>
+    <div class="meta">
+      <p><strong>Shift:</strong> {{ shift_start }} – {{ shift_end }}</p>
+      <p><strong>Workdays:</strong> {{ workdays }}</p>
+      <p><strong>Issue:</strong> {{ sleep_issue }}</p>
+      <p><strong>Email:</strong> {{ email }}</p>
+    </div>
+    <pre>{{ sleep_plan }}</pre>
+    <a class="btn" href="/download/{{ submission_id }}">Download PDF</a>
+  </div>
+</body>
+</html>
