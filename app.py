@@ -21,17 +21,18 @@ def index():
 def webhook():
     try:
         data = request.json
+        print("Incoming JSON:", data)  # 👈 Add this line for debugging
+        
         fields = data['data']['fields']
-        
-        # Extract specific fields
         answers = {f['label'].strip(): f['value'] for f in fields if 'value' in f}
-        
+
         start_time = answers.get("What time do you usually start your shift?")
         end_time = answers.get("What time does your shift end?")
         challenge = answers.get("What’s your biggest sleep challenge right now?")
         email = answers.get("Enter your email to receive your personalized plan")
 
-        # Compose GPT prompt
+        print("Parsed answers:", answers)  # 👈 Add this too
+
         prompt = f"""
         I work night shift starting at {start_time} and ending at {end_time}.
         My biggest sleep challenge is: {challenge}.
@@ -45,23 +46,10 @@ def webhook():
 
         sleep_plan = response.choices[0].message.content.strip()
 
-        # Email the plan
         send_email(to=email, subject="Your Personalized Sleep Plan", body=sleep_plan)
 
         return jsonify({"status": "success", "plan": sleep_plan}), 200
 
     except Exception as e:
+        print("Error:", str(e))  # 👈 Show the error in logs
         return jsonify({"error": str(e)}), 500
-
-def send_email(to, subject, body):
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_ADDRESS
-    msg["To"] = to
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        smtp.send_message(msg)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
