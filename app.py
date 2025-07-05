@@ -1,68 +1,67 @@
 from flask import Flask, request, jsonify
-import openai
 import os
+import openai
 
 app = Flask(__name__)
 
-# Set your OpenAI API key here
-openai.api_key = os.getenv("OPENAI_API_KEY")  # make sure this is set in Render
+# Set your API key from environment variable
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
-    return "Sleep Planner is running!"
+    return "Sleep Planner is live!"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.json
-        print("Full incoming JSON:", data)  # Debug print
+        # Try to parse the incoming JSON
+        data = request.get_json(force=True)
+        print("✅ Full incoming JSON:", data)
 
-        fields = data.get("data", {}).get("fields", [])
-        print("Extracted fields:", fields)  # Debug print
+        fields = data["data"]["fields"]
 
-        # Extract form values with fallbacks
-        shift_start = next((f.get("value") for f in fields if f.get("key") == "question_VPbyQ6"), "00:00")
-        shift_end = next((f.get("value") for f in fields if f.get("key") == "question_P9by1x"), "08:00")
-        sleep_challenge = next(
-            (
-                f.get("value")[0] if isinstance(f.get("value"), list) else f.get("value")
-                for f in fields if f.get("key") == "question_rOJWaX"
-            ),
-            "Staying asleep"
-        )
-        email = next((f.get("value") for f in fields if f.get("key") == "question_479dJ5"), None)
+        # Extract values safely
+        shift_start = next((f["value"] for f in fields if f["key"] == "question_VPbyQ6"), "00:00")
+        shift_end = next((f["value"] for f in fields if f["key"] == "question_P9by1x"), "08:00")
+        workdays = [f["label"].split(" (")[-1].replace(")", "") 
+                    for f in fields if f["key"].startswith("question_ElZYd2_") and f.get("value") == True]
+        sleep_issue = next((f["value"][0] if isinstance(f["value"], list) else f["value"]
+                            for f in fields if f["key"] == "question_rOJWaX"), "Not specified")
+        email = next((f["value"] for f in fields if f["key"] == "question_479dJ5"), "unknown")
 
-        if not email:
-            return jsonify({"error": "Missing email field"}), 400
+        print("📅 Shift:", shift_start, "-", shift_end)
+        print("🗓️ Workdays:", workdays)
+        print("😴 Issue:", sleep_issue)
+        print("📧 Email:", email)
 
-        prompt = (
-            f"I'm a night shift worker. My shift starts at {shift_start} and ends at {shift_end}. "
-            f"My biggest sleep issue is: {sleep_challenge}. Generate a personalized sleep optimization plan."
-        )
+        # Construct prompt
+        prompt = f"""You are a sleep expert. Create a personalized sleep plan for a night shift worker.
+Shift: {shift_start} to {shift_end}
+Workdays: {', '.join(workdays)}
+Main issue: {sleep_issue}
 
-        print("Sending prompt to OpenAI:", prompt)  # Debug print
+Give a clear daily sleep routine, advice for winding down, and how to reset on off days.
+"""
 
+        # Ask GPT-4 (or GPT-3.5)
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are a sleep coach for shift workers."},
+                {"role": "system", "content": "You are a helpful sleep optimization expert."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7,
-            max_tokens=600
+            max_tokens=800,
+            temperature=0.7
         )
 
-        sleep_plan = response.choices[0].message.content
+        result = response['choices'][0]['message']['content']
+        print("✅ GPT Response:", result)
 
-        return jsonify({
-            "status": "success",
-            "email": email,
-            "sleep_plan": sleep_plan
-        })
+        return jsonify({"status": "success", "plan": result})
 
     except Exception as e:
-        print("ERROR:", str(e))  # Debug print
-        return jsonify({"error": str(e)}), 500
+        print("❌ ERROR:", str(e))
+        return jsonify({"error": "Failed to process webhook", "details": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(debug=False, host="0.0.0.0", port=10000)
