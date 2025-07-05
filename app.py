@@ -4,7 +4,6 @@ import openai
 
 app = Flask(__name__)
 
-# Use API key from environment
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 @app.route("/", methods=["GET"])
@@ -19,33 +18,36 @@ def webhook():
 
         fields = data["data"]["fields"]
 
-        # Parse Tally data fields
         shift_start = next((f["value"] for f in fields if f["key"] == "question_VPbyQ6"), "00:00")
         shift_end = next((f["value"] for f in fields if f["key"] == "question_P9by1x"), "08:00")
-        workdays = [f["label"].split(" (")[-1].replace(")", "") 
-                    for f in fields if f["key"].startswith("question_ElZYd2_") and f.get("value") == True]
-        sleep_issue = next((f["value"][0] if isinstance(f["value"], list) else f["value"]
-                            for f in fields if f["key"] == "question_rOJWaX"), "Not specified")
+
+        # Extract workdays using checkbox options
+        workdays_field = next((f for f in fields if f["key"] == "question_ElZYd2"), {})
+        all_options = workdays_field.get("options", [])
+        selected_ids = set(workdays_field.get("value", []))
+        workdays = [opt["text"] for opt in all_options if opt["id"] in selected_ids]
+
+        # Extract sleep issue (text, not ID)
+        issue_field = next((f for f in fields if f["key"] == "question_rOJWaX"), {})
+        selected_issue_id = issue_field.get("value", [None])[0]
+        issue_text = next((opt["text"] for opt in issue_field.get("options", []) if opt["id"] == selected_issue_id), "Not specified")
+
         email = next((f["value"] for f in fields if f["key"] == "question_479dJ5"), "unknown")
 
         print("📅 Shift:", shift_start, "-", shift_end)
         print("🗓️ Workdays:", workdays)
-        print("😴 Issue:", sleep_issue)
+        print("😴 Issue:", issue_text)
         print("📧 Email:", email)
 
-        # Create prompt
         prompt = f"""You are a sleep expert. Create a personalized sleep plan for a night shift worker.
 Shift: {shift_start} to {shift_end}
 Workdays: {', '.join(workdays)}
-Main issue: {sleep_issue}
+Main issue: {issue_text}
 
 Give a clear daily sleep routine, advice for winding down, and how to reset on off days.
 """
 
-        # Use new OpenAI SDK format
-        client = openai.OpenAI(api_key=openai.api_key)
-
-        response = client.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful sleep optimization expert."},
