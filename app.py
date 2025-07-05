@@ -1,70 +1,73 @@
-from flask import Flask, request, jsonify
 import os
-from openai import OpenAI
+import smtplib
+from email.mime.text import MIMEText
+from flask import Flask, request, jsonify
+import openai
 
 app = Flask(__name__)
 
-# Initialize OpenAI client with new SDK
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# ENV VARS REQUIRED: OPENAI_API_KEY, GMAIL_ADDRESS, GMAIL_APP_PASSWORD
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-@app.route("/", methods=["GET"])
+# Util: send email
+def send_email(to_email, subject, body):
+    gmail_user = os.getenv("GMAIL_ADDRESS")
+    gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
+
+    msg = MIMEText(body, "plain")
+    msg["Subject"] = subject
+    msg["From"] = gmail_user
+    msg["To"] = to_email
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(gmail_user, gmail_pass)
+        smtp.send_message(msg)
+
+# Util: create prompt from form data
+def generate_prompt(shift_start, shift_end, workdays, sleep_issues):
+    days = ", ".join(workdays)
+    issue = sleep_issues if isinstance(sleep_issues, str) else ", ".join(sleep_issues)
+    return (
+        f"I work the night shift from {shift_start} to {shift_end}, "
+        f"on the following days: {days}. "
+        f"My biggest sleep challenge is: {issue}. "
+        f"Please create a personalized sleep routine and health guide tailored to my situation."
+    )
+
+@app.route("/")
 def home():
-    return "Sleep Planner is live!"
+    return "Sleep Planner is running!"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    try:
-        data = request.get_json(force=True)
-        print("✅ Full incoming JSON:", data)
+    data = request.json
+    fields = {f["key"]: f for f in data["data"]["fields"]}
 
-        fields = data["data"]["fields"]
+    # Extract form fields
+    shift_start = fields["question_VPbyQ6"]["value"]
+    shift_end = fields["question_P9by1x"]["value"]
+    workdays = fields["question_ElZYd2"]["value"]
+    sleep_issues = fields["question_rOJWaX"]["options"][0]["text"]  # Assuming only one selected
+    email = fields["question_479dJ5"]["value"]
 
-        shift_start = next((f["value"] for f in fields if f["key"] == "question_VPbyQ6"), "00:00")
-        shift_end = next((f["value"] for f in fields if f["key"] == "question_P9by1x"), "08:00")
+    # Generate GPT sleep plan
+    prompt = generate_prompt(shift_start, shift_end, workdays, sleep_issues)
+    print(f"🧠 Prompt: {prompt}")
 
-        workdays_field = next((f for f in fields if f["key"] == "question_ElZYd2"), {})
-        all_options = workdays_field.get("options", [])
-        selected_ids = set(workdays_field.get("value", []))
-        workdays = [opt["text"] for opt in all_options if opt["id"] in selected_ids]
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    sleep_plan = response.choices[0].message.content
 
-        issue_field = next((f for f in fields if f["key"] == "question_rOJWaX"), {})
-        selected_issue_id = issue_field.get("value", [None])[0]
-        issue_text = next((opt["text"] for opt in issue_field.get("options", []) if opt["id"] == selected_issue_id), "Not specified")
+    # Email the sleep plan
+    send_email(
+        to_email=email,
+        subject="Your Personalized AI Sleep Plan",
+        body=sleep_plan
+    )
 
-        email = next((f["value"] for f in fields if f["key"] == "question_479dJ5"), "unknown")
-
-        print("📅 Shift:", shift_start, "-", shift_end)
-        print("🗓️ Workdays:", workdays)
-        print("😴 Issue:", issue_text)
-        print("📧 Email:", email)
-
-        # Prompt
-        prompt = f"""You are a sleep expert. Create a personalized sleep plan for a night shift worker.
-Shift: {shift_start} to {shift_end}
-Workdays: {', '.join(workdays)}
-Main issue: {issue_text}
-
-Give a clear daily sleep routine, advice for winding down, and how to reset on off days."""
-
-        # OpenAI API Call using new SDK
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a helpful sleep optimization expert."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=800
-        )
-
-        result = response.choices[0].message.content
-        print("✅ GPT Response:", result)
-
-        return jsonify({"status": "success", "plan": result})
-
-    except Exception as e:
-        print("❌ ERROR:", str(e))
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"status": "success", "message": "Email sent!"})
 
 if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=10000)
+    app.run(debug=True, port=10000)
