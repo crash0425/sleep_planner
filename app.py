@@ -1,143 +1,150 @@
-from flask import Flask, request, render_template_string, send_file
-from weasyprint import HTML
-from io import BytesIO
+import os
 import json
-import datetime
+from flask import Flask, request, render_template_string, send_file
+from datetime import datetime
+from io import BytesIO
+from jinja2 import Template
+from weasyprint import HTML
 
 app = Flask(__name__)
 
-@app.route('/', methods=['GET'])
-def landing_page():
-    return "✅ AI Sleep Planner is running."
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    try:
-        data = request.get_json()
-        print("✅ Full incoming JSON:", json.dumps(data, indent=2))
-
-        # Extract relevant form responses
-        fields = data['data']['fields']
-        shift_start = next(f['value'] for f in fields if 'start your shift' in f['label'].lower())
-        shift_end = next(f['value'] for f in fields if 'shift end' in f['label'].lower())
-        days_worked_ids = next(f['value'] for f in fields if f['key'].startswith('question_ElZYd2') and isinstance(f['value'], list))
-        days_options = next(f['options'] for f in fields if f['key'].startswith('question_ElZYd2') and isinstance(f['value'], list))
-        days_worked = [opt['text'] for opt in days_options if opt['id'] in days_worked_ids]
-        challenge = next(f['options'] for f in fields if 'sleep challenge' in f['label'].lower())
-        selected_challenge_id = next(f['value'][0] for f in fields if 'sleep challenge' in f['label'].lower())
-        challenge_text = next(opt['text'] for opt in challenge if opt['id'] == selected_challenge_id)
-        email = next(f['value'] for f in fields if f['type'] == 'INPUT_EMAIL')
-
-        print(f"📅 Shift: {shift_start} - {shift_end}")
-        print(f"🗓️ Workdays: {days_worked}")
-        print(f"😴 Issue: {challenge_text}")
-        print(f"📧 Email: {email}")
-
-        sleep_plan_html = render_template_string(SLEEP_PLAN_TEMPLATE,
-                                                 shift_start=shift_start,
-                                                 shift_end=shift_end,
-                                                 days_worked=", ".join(days_worked),
-                                                 challenge=challenge_text,
-                                                 email=email)
-
-        pdf_file = HTML(string=sleep_plan_html).write_pdf()
-        buffer = BytesIO(pdf_file)
-
-        # Save PDF in memory and serve download link
-        pdf_storage[email] = buffer
-        return sleep_plan_html
-
-    except Exception as e:
-        print("❌ ERROR:", e)
-        return "❌ Failed to generate sleep plan", 500
-
-
-@app.route('/download/<email>')
-def download_pdf(email):
-    buffer = pdf_storage.get(email)
-    if not buffer:
-        return "❌ PDF not found", 404
-    buffer.seek(0)
-    return send_file(buffer, as_attachment=True, download_name='sleep_plan.pdf', mimetype='application/pdf')
-
-# Temporary in-memory storage
-pdf_storage = {}
-
-# Basic HTML template for the sleep plan (landing page style)
-SLEEP_PLAN_TEMPLATE = """
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Your Personalized Sleep Plan</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            background: #f0f4f8;
+            background: #f4f7f9;
             margin: 0;
             padding: 2rem;
-            color: #333;
         }
         .container {
             background: white;
+            border-radius: 10px;
+            padding: 2rem;
             max-width: 700px;
             margin: auto;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
         h1 {
-            color: #2c3e50;
+            color: #2b2d42;
         }
-        a.button {
+        p, li {
+            font-size: 16px;
+            line-height: 1.6;
+        }
+        .section {
+            margin-bottom: 2rem;
+        }
+        .download {
+            text-align: center;
+            margin-top: 2rem;
+        }
+        .download a {
             display: inline-block;
-            margin-top: 20px;
-            padding: 10px 20px;
-            background: #2c3e50;
+            background: #007bff;
             color: white;
-            text-decoration: none;
+            padding: 0.75rem 1.5rem;
             border-radius: 5px;
+            text-decoration: none;
+            transition: background 0.3s;
         }
-        .info {
-            margin-bottom: 20px;
-        }
-        ul {
-            margin-left: 1rem;
+        .download a:hover {
+            background: #0056b3;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🛌 Your Personalized AI Sleep Plan</h1>
-        <div class="info">
-            <strong>Shift:</strong> {{ shift_start }} – {{ shift_end }}<br>
-            <strong>Workdays:</strong> {{ days_worked }}<br>
-            <strong>Sleep Issue:</strong> {{ challenge }}<br>
-            <strong>Email:</strong> {{ email }}
+        <h1>Your Personalized Sleep Plan</h1>
+        <div class="section">
+            <strong>📅 Shift:</strong> {{ shift_start }} - {{ shift_end }}<br>
+            <strong>🗓️ Workdays:</strong> {{ workdays|join(", ") }}<br>
+            <strong>😴 Issue:</strong> {{ issue }}<br>
+            <strong>📧 Email:</strong> {{ email }}
         </div>
-        <h2>📋 Sleep Routine</h2>
-        <ul>
-            <li>Go to sleep around 1–2 hours after your shift ends (~13:00).</li>
-            <li>Wake up around 21:00 to align with your night shift schedule.</li>
-            <li>Take a short 20–30 minute nap before your shift if needed.</li>
-        </ul>
-        <h2>🧘 Wind-Down Routine</h2>
-        <ul>
-            <li>Avoid screens and bright light before bed.</li>
-            <li>Try relaxing habits like reading, meditation, or warm showers.</li>
-            <li>Make your room dark and quiet using curtains, masks, or white noise.</li>
-        </ul>
-        <h2>🔁 Resetting on Days Off</h2>
-        <ul>
-            <li>Keep your sleep times consistent, or shift them gradually.</li>
-            <li>Get bright light in the morning, dim lights in the evening.</li>
-            <li>Do light exercise and avoid heavy meals near bedtime.</li>
-        </ul>
-        <a class="button" href="/download/{{ email }}">⬇️ Download PDF</a>
+        <div class="section">
+            {{ response|safe }}
+        </div>
+        <div class="download">
+            <a href="/download/{{ response_id }}" target="_blank">Download as PDF</a>
+        </div>
     </div>
 </body>
 </html>
 """
 
+responses = {}
+
+def generate_sleep_plan(shift_start, shift_end, workdays, issue):
+    # Placeholder logic – customize as needed
+    return f"""
+    <h2>Sleep Routine</h2>
+    <ul>
+        <li>Sleep between {shift_end} and 21:00 (9:00 PM) to get 8 hours of sleep.</li>
+        <li>Try to keep this consistent even on your off days: {', '.join(workdays)}.</li>
+        <li>Your biggest challenge is: <strong>{issue}</strong>.</li>
+    </ul>
+    <h2>Winding Down</h2>
+    <ul>
+        <li>Create a dark, quiet, cool room to sleep.</li>
+        <li>Use earplugs, blackout curtains, and white noise if needed.</li>
+        <li>Have a relaxing routine before sleep like reading, warm bath, or gentle music.</li>
+    </ul>
+    <h2>Resetting on Off Days</h2>
+    <ul>
+        <li>Use bright light when awake and avoid screens before bed.</li>
+        <li>Eat light at night and avoid caffeine before sleep.</li>
+    </ul>
+    """
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.get_json()
+    print("✅ Full incoming JSON:", json.dumps(data, indent=2))
+
+    fields = {field['label'].strip(): field['value'] for field in data['data']['fields'] if 'value' in field}
+
+    shift_start = fields.get('What time do you usually start your shift?')
+    shift_end = fields.get('What time does your shift end?')
+    workdays = fields.get('What days of the week do you work?', [])
+    issue = fields.get('What’s your biggest sleep challenge right now?', [])[0] if isinstance(fields.get('What’s your biggest sleep challenge right now?'), list) else ''
+    email = fields.get('Enter your email to receive your personalized plan')
+    response_id = data['data']['responseId']
+
+    response_html = generate_sleep_plan(shift_start, shift_end, workdays, issue)
+
+    html = Template(HTML_TEMPLATE).render(
+        shift_start=shift_start,
+        shift_end=shift_end,
+        workdays=workdays,
+        issue=issue,
+        email=email,
+        response=response_html,
+        response_id=response_id
+    )
+
+    responses[response_id] = html
+
+    return html
+
+@app.route('/download/<response_id>')
+def download(response_id):
+    html_content = responses.get(response_id)
+    if not html_content:
+        return "Not found", 404
+
+    pdf = HTML(string=html_content).write_pdf()
+    return send_file(BytesIO(pdf), download_name="sleep_plan.pdf", as_attachment=True)
+
+@app.route('/')
+def index():
+    return "<h1>Sleep Plan Generator is Live</h1>"
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
