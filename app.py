@@ -75,7 +75,13 @@ Please write a personalized, practical AI-generated sleep optimization plan for 
         plan = response.json()["choices"][0]["message"]["content"]
         print("✅ AI Plan Generated:", plan)
 
-        # Respond with plan (or optionally send it via email)
+        # Respond with plan
         return jsonify({"plan": plan})
 
     except Exception as e:
+        print("❌ ERROR:", e)
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
