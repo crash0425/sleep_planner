@@ -1,86 +1,62 @@
 from flask import Flask, request, jsonify
 import os
-import requests
+import openai
 
 app = Flask(__name__)
 
-@app.route("/", methods=["GET"])
-def index():
-    return "Sleep Planner API is live!"
+openai.api_key = os.getenv("OPENAI_API_KEY")  # use your OpenAI or OpenRouter key
+MODEL = "gpt-3.5-turbo"
+
+@app.route("/")
+def home():
+    return "Sleep Planner is live!"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.json
-        print("📥 Incoming webhook data:", data)
+        data = request.get_json()
+
+        # Log raw payload for debugging
+        print("Received data:", data)
 
         fields = data.get("data", {}).get("fields", [])
-        print("📦 Extracted fields:", fields)
+        answers = {}
 
-        # Helper to extract field by label
-        def get_field_value(label):
-            for field in fields:
-                if field.get("label", "").strip().lower().startswith(label.strip().lower()):
-                    return field.get("value")
-            return None
+        for field in fields:
+            key = field.get("key")
+            value = field.get("value")
+            if key and value:
+                answers[key] = value
 
-        start_time = get_field_value("What time do you usually start your shift?")
-        end_time = get_field_value("What time does your shift end?")
-        sleep_issue = get_field_value("What’s your biggest sleep challenge right now?")
-        email = get_field_value("Enter your email to receive your personalized plan")
+        email = answers.get("question_479dJ5", "noemail@example.com")
+        start = answers.get("question_VPbyQ6", "00:00")
+        end = answers.get("question_P9by1x", "08:00")
+        sleep_issue = answers.get("question_rOJWaX", "Not specified")
 
-        # Logging extracted values
-        print("🕒 Start Time:", start_time)
-        print("🕓 End Time:", end_time)
-        print("😴 Sleep Issue:", sleep_issue)
-        print("📧 Email:", email)
+        # Build a prompt
+        prompt = (
+            f"I'm a night shift worker. My shift starts at {start} and ends at {end}. "
+            f"My biggest sleep issue is: {sleep_issue}. Create a personalized sleep improvement plan for me."
+        )
 
-        if not all([start_time, end_time, sleep_issue, email]):
-            return jsonify({"error": "Missing one or more required fields."}), 400
+        print("Prompt to OpenAI:", prompt)
 
-        # Compose prompt
-        prompt = f"""You are a sleep expert helping a night shift worker build a sleep routine.
-Here are the details:
-- Shift Start: {start_time}
-- Shift End: {end_time}
-- Biggest Sleep Challenge: {sleep_issue}
-
-Please write a personalized, practical AI-generated sleep optimization plan for this person that includes pre-shift wind-down tips, sleep timing, light management, and optional supplements."""
-
-        # Prepare OpenRouter request
-        OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-        if not OPENROUTER_API_KEY:
-            return jsonify({"error": "Missing OpenRouter API Key"}), 500
-
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://sleep-planner.onrender.com",
-            "X-Title": "AI Sleep Planner"
-        }
-
-        payload = {
-            "model": "openai/gpt-3.5-turbo",
-            "messages": [
+        response = openai.ChatCompletion.create(
+            model=MODEL,
+            messages=[
                 {"role": "system", "content": "You are a sleep optimization expert."},
                 {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 1000
-        }
+            ]
+        )
 
-        print("📡 Sending request to OpenRouter...")
-        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
-        response.raise_for_status()
+        plan = response['choices'][0]['message']['content']
+        print("Generated Plan:", plan)
 
-        plan = response.json()["choices"][0]["message"]["content"]
-        print("✅ AI Plan Generated:", plan)
-
-        # Respond with plan
-        return jsonify({"plan": plan})
+        return jsonify({"email": email, "plan": plan})
 
     except Exception as e:
-        print("❌ ERROR:", e)
-        return jsonify({"error": str(e)}), 500
+        print("Error occurred:", str(e))
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
