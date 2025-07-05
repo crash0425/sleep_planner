@@ -4,72 +4,78 @@ import requests
 
 app = Flask(__name__)
 
-# Get your OpenRouter API key from environment variables
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = "openai/gpt-3.5-turbo"
-
-@app.route("/")
-def home():
-    return "Sleep Planner API is live"
+@app.route("/", methods=["GET"])
+def index():
+    return "Sleep Planner API is live!"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.json
+        print("📥 Incoming webhook data:", data)
 
-        # Extract fields from form submission
         fields = data.get("data", {}).get("fields", [])
-        values = {field["label"].strip(): field.get("value") or field.get("valueArray", [None])[0] for field in fields}
+        print("📦 Extracted fields:", fields)
 
-        # Clean inputs
-        start = values.get("What time do you usually start your shift?")
-        end = values.get("What time does your shift end?")
-        days = [f["label"].strip().replace("What days of the week do you work? (", "").replace(")", "")
-                for f in fields if "What days of the week do you work?" in f["label"] and f["value"] == True]
-        challenge = values.get("What’s your biggest sleep challenge right now?")
-        email = values.get("Enter your email to receive your personalized plan")
+        # Helper to extract field by label
+        def get_field_value(label):
+            for field in fields:
+                if field.get("label", "").strip().lower().startswith(label.strip().lower()):
+                    return field.get("value")
+            return None
 
-        if not all([start, end, challenge, email]):
-            return jsonify({"error": "Missing required fields"}), 400
+        start_time = get_field_value("What time do you usually start your shift?")
+        end_time = get_field_value("What time does your shift end?")
+        sleep_issue = get_field_value("What’s your biggest sleep challenge right now?")
+        email = get_field_value("Enter your email to receive your personalized plan")
 
-        prompt = f"""You are a certified sleep expert. Create a personalized sleep improvement plan for someone who:
-- Works night shifts from {start} to {end}
-- Works on these days: {', '.join(days)}
-- Their biggest sleep challenge is: {challenge}
+        # Logging extracted values
+        print("🕒 Start Time:", start_time)
+        print("🕓 End Time:", end_time)
+        print("😴 Sleep Issue:", sleep_issue)
+        print("📧 Email:", email)
 
-The plan should include:
-1. When to sleep and wake up
-2. When to eat meals
-3. When to take melatonin (if applicable)
-4. Any tips to fall back asleep
-5. Weekend and family time strategies
-Respond in a friendly tone."""
+        if not all([start_time, end_time, sleep_issue, email]):
+            return jsonify({"error": "Missing one or more required fields."}), 400
 
-        # Make request to OpenRouter
+        # Compose prompt
+        prompt = f"""You are a sleep expert helping a night shift worker build a sleep routine.
+Here are the details:
+- Shift Start: {start_time}
+- Shift End: {end_time}
+- Biggest Sleep Challenge: {sleep_issue}
+
+Please write a personalized, practical AI-generated sleep optimization plan for this person that includes pre-shift wind-down tips, sleep timing, light management, and optional supplements."""
+
+        # Prepare OpenRouter request
+        OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+        if not OPENROUTER_API_KEY:
+            return jsonify({"error": "Missing OpenRouter API Key"}), 500
+
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://sleep-planner.onrender.com",
+            "X-Title": "AI Sleep Planner"
         }
-        payload = {
-            "model": MODEL,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ]
-        }
-        res = requests.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers)
-        res.raise_for_status()
-        response_text = res.json()["choices"][0]["message"]["content"]
 
-        # Return plan as JSON (you can change to email response later)
-        return jsonify({
-            "email": email,
-            "plan": response_text
-        })
+        payload = {
+            "model": "openai/gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": "You are a sleep optimization expert."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 1000
+        }
+
+        print("📡 Sending request to OpenRouter...")
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+        response.raise_for_status()
+
+        plan = response.json()["choices"][0]["message"]["content"]
+        print("✅ AI Plan Generated:", plan)
+
+        # Respond with plan (or optionally send it via email)
+        return jsonify({"plan": plan})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Required for Render to detect the port
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
