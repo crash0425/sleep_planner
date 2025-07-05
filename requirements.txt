@@ -4,3 +4,5 @@ python-dotenv
 openai>=1.0.0
 pdfkit
 https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox-0.12.6-1.macos-cocoa.pkg
+weasyprint
+
