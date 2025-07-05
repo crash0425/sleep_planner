@@ -1,63 +1,55 @@
 from flask import Flask, request, jsonify
-import os
 import openai
+import os
 
 app = Flask(__name__)
 
-openai.api_key = os.getenv("OPENAI_API_KEY")  # use your OpenAI or OpenRouter key
-MODEL = "gpt-3.5-turbo"
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-@app.route("/")
-def home():
+@app.route("/", methods=["GET"])
+def index():
     return "Sleep Planner is live!"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json()
-
-        # Log raw payload for debugging
-        print("Received data:", data)
-
+        data = request.json
         fields = data.get("data", {}).get("fields", [])
-        answers = {}
 
-        for field in fields:
-            key = field.get("key")
-            value = field.get("value")
-            if key and value:
-                answers[key] = value
+        shift_start = next((f["value"] for f in fields if f["key"] == "question_VPbyQ6"), "00:00")
+        shift_end = next((f["value"] for f in fields if f["key"] == "question_P9by1x"), "08:00")
+        sleep_challenge = next((f["value"][0] if isinstance(f["value"], list) else f["value"]
+                                for f in fields if f["key"] == "question_rOJWaX"), "Staying asleep")
+        email = next((f["value"] for f in fields if f["key"] == "question_479dJ5"), None)
 
-        email = answers.get("question_479dJ5", "noemail@example.com")
-        start = answers.get("question_VPbyQ6", "00:00")
-        end = answers.get("question_P9by1x", "08:00")
-        sleep_issue = answers.get("question_rOJWaX", "Not specified")
+        if not email:
+            return jsonify({"error": "Missing email"}), 400
 
-        # Build a prompt
-        prompt = (
-            f"I'm a night shift worker. My shift starts at {start} and ends at {end}. "
-            f"My biggest sleep issue is: {sleep_issue}. Create a personalized sleep improvement plan for me."
-        )
-
-        print("Prompt to OpenAI:", prompt)
+        prompt = (f"I'm a night shift worker. My shift starts at {shift_start} and ends at {shift_end}. "
+                  f"My biggest sleep issue is: {sleep_challenge}. Generate a personalized sleep optimization plan "
+                  f"with a daily routine, bedtime strategy, and tips for better recovery on off days.")
 
         response = openai.ChatCompletion.create(
-            model=MODEL,
+            model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are a sleep optimization expert."},
+                {"role": "system", "content": "You are a sleep coach for shift workers."},
                 {"role": "user", "content": prompt}
-            ]
+            ],
+            temperature=0.7,
+            max_tokens=600
         )
 
-        plan = response['choices'][0]['message']['content']
-        print("Generated Plan:", plan)
+        sleep_plan = response.choices[0].message.content
 
-        return jsonify({"email": email, "plan": plan})
+        # For now, return the plan (you can replace this with email logic)
+        return jsonify({
+            "status": "success",
+            "email": email,
+            "sleep_plan": sleep_plan
+        })
 
     except Exception as e:
-        print("Error occurred:", str(e))
-        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(port=10000, host="0.0.0.0")
