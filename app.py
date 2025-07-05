@@ -3,12 +3,18 @@ import os
 import openai
 import smtplib
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 app = Flask(__name__)
 
-# Set OpenAI API key
+# Set your OpenAI API key
 openai.api_key = os.environ.get("OPENAI_API_KEY")
+
+# Email config from environment
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
+SMTP_USER = os.environ.get("SMTP_USER")  # your Gmail address
+SMTP_PASS = os.environ.get("SMTP_PASS")  # your Gmail App Password
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", SMTP_USER)
 
 @app.route("/", methods=["GET"])
 def home():
@@ -41,7 +47,7 @@ def webhook():
         print("😴 Issue:", issue_text)
         print("📧 Email:", email)
 
-        # Prompt
+        # Construct OpenAI prompt
         prompt = f"""You are a sleep expert. Create a personalized sleep plan for a night shift worker.
 Shift: {shift_start} to {shift_end}
 Workdays: {', '.join(workdays)}
@@ -49,7 +55,7 @@ Main issue: {issue_text}
 
 Give a clear daily sleep routine, advice for winding down, and how to reset on off days."""
 
-        # OpenAI API Call using updated SDK
+        # GPT-4 call
         response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
@@ -63,37 +69,24 @@ Give a clear daily sleep routine, advice for winding down, and how to reset on o
         result = response.choices[0].message.content
         print("✅ GPT Response:", result)
 
-        send_email(email, result)
+        # Email setup
+        msg = MIMEText(result)
+        msg["Subject"] = "Your Personalized AI Sleep Plan"
+        msg["From"] = SENDER_EMAIL
+        msg["To"] = email
 
+        # Send via Gmail SMTP
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+
+        print("✅ Email sent successfully to", email)
         return jsonify({"status": "success", "plan": result})
 
     except Exception as e:
         print("❌ ERROR:", str(e))
         return jsonify({"error": str(e)}), 500
-
-
-def send_email(to_address, body):
-    sender_email = os.environ["EMAIL_ADDRESS"]
-    app_password = os.environ["EMAIL_APP_PASSWORD"]
-    
-    message = MIMEMultipart("alternative")
-    message["Subject"] = "Your Personalized Sleep Plan"
-    message["From"] = sender_email
-    message["To"] = to_address
-
-    part = MIMEText(body, "plain")
-    message.attach(part)
-
-    try:
-        with smtplib.SMTP("smtp.office365.com", 587) as server:
-            server.starttls()
-            server.login(sender_email, app_password)
-            server.sendmail(sender_email, to_address, message.as_string())
-            print("✅ Email sent successfully!")
-    except Exception as e:
-        print("❌ Email sending failed:", str(e))
-        raise e
-
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=10000)
