@@ -1,11 +1,11 @@
 from flask import Flask, request, jsonify
 import os
-import openai
+from openai import OpenAI
 
 app = Flask(__name__)
 
-# Set OpenAI key
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+# Initialize OpenAI client with new SDK
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 @app.route("/", methods=["GET"])
 def home():
@@ -46,8 +46,8 @@ Main issue: {issue_text}
 
 Give a clear daily sleep routine, advice for winding down, and how to reset on off days."""
 
-        # OpenAI API Call using updated SDK
-        response = openai.chat.completions.create(
+        # OpenAI API Call using new SDK
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful sleep optimization expert."},
