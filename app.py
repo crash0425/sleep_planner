@@ -5,18 +5,10 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-from openai import OpenAI
-
 app = Flask(__name__)
 
-# OpenAI client
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-# Email credentials
-EMAIL_ADDRESS = os.environ.get("EMAIL_ADDRESS")
-EMAIL_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")  # App-specific password
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
+# Set OpenAI API key
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 @app.route("/", methods=["GET"])
 def home():
@@ -49,6 +41,7 @@ def webhook():
         print("😴 Issue:", issue_text)
         print("📧 Email:", email)
 
+        # Prompt
         prompt = f"""You are a sleep expert. Create a personalized sleep plan for a night shift worker.
 Shift: {shift_start} to {shift_end}
 Workdays: {', '.join(workdays)}
@@ -56,8 +49,8 @@ Main issue: {issue_text}
 
 Give a clear daily sleep routine, advice for winding down, and how to reset on off days."""
 
-        # OpenAI call
-        response = client.chat.completions.create(
+        # OpenAI API Call using updated SDK
+        response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful sleep optimization expert."},
@@ -67,36 +60,40 @@ Give a clear daily sleep routine, advice for winding down, and how to reset on o
             max_tokens=800
         )
 
-        plan = response.choices[0].message.content
-        print("✅ GPT Response:", plan)
+        result = response.choices[0].message.content
+        print("✅ GPT Response:", result)
 
-        # Email the plan
-        send_email(email, plan)
+        send_email(email, result)
 
-        return jsonify({"status": "success", "plan": plan})
+        return jsonify({"status": "success", "plan": result})
 
     except Exception as e:
         print("❌ ERROR:", str(e))
         return jsonify({"error": str(e)}), 500
 
 
-def send_email(recipient, body):
-    subject = "Your Personalized Night Shift Sleep Plan"
-    msg = MIMEMultipart()
-    msg["From"] = EMAIL_ADDRESS
-    msg["To"] = recipient
-    msg["Subject"] = subject
+def send_email(to_address, body):
+    sender_email = os.environ["EMAIL_ADDRESS"]
+    app_password = os.environ["EMAIL_APP_PASSWORD"]
+    
+    message = MIMEMultipart("alternative")
+    message["Subject"] = "Your Personalized Sleep Plan"
+    message["From"] = sender_email
+    message["To"] = to_address
 
-    msg.attach(MIMEText(body, "plain"))
+    part = MIMEText(body, "plain")
+    message.attach(part)
 
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-        server.starttls()
-        server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        server.send_message(msg)
-
-    print("📧 Email sent to:", recipient)
+    try:
+        with smtplib.SMTP("smtp.office365.com", 587) as server:
+            server.starttls()
+            server.login(sender_email, app_password)
+            server.sendmail(sender_email, to_address, message.as_string())
+            print("✅ Email sent successfully!")
+    except Exception as e:
+        print("❌ Email sending failed:", str(e))
+        raise e
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(debug=False, host="0.0.0.0", port=port)
+    app.run(debug=False, host="0.0.0.0", port=10000)
