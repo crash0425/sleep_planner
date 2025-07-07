@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Your Sleep Plan</title>
+    <style>
+        body {
+            font-family: Georgia, serif;
+            max-width: 700px;
+            margin: auto;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .download {
+            text-align: center;
+            margin-top: 2rem;
+        }
+        .download a {
+            display: inline-block;
+            background-color: #007BFF;
+            color: white;
+            padding: 0.8rem 1.5rem;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Your Personalized Sleep Plan</h1>
+    <div>{{ sleep_plan | safe }}</div>
+
+    <div class="download">
+        <a href="/download-pdf">📄 Download as PDF</a>
+    </div>
+</body>
+</html>
