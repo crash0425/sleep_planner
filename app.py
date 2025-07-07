@@ -1,93 +1,101 @@
 import os
-from flask import Flask, request, render_template, send_file
+from flask import Flask, request, render_template, redirect, url_for
 from dotenv import load_dotenv
 import openai
-import json
-from datetime import datetime
 from weasyprint import HTML
 
+app = Flask(__name__)
 load_dotenv()
 
-app = Flask(__name__)
-
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
-def extract_info(payload):
-    shift_start = ""
-    shift_end = ""
-    workdays = []
-    sleep_issue = ""
-    email = ""
-
-    for field in payload["data"]["fields"]:
-        if field["key"] == "question_VPbyQ6":
-            shift_start = field["value"]
-        elif field["key"] == "question_P9by1x":
-            shift_end = field["value"]
-        elif field["key"] == "question_ElZYd2":
-            workdays = [opt["text"] for opt in field.get("options", []) if opt["id"] in field.get("value", [])]
-        elif field["key"] == "question_rOJWaX":
-            sleep_issue = next((opt["text"] for opt in field.get("options", []) if opt["id"] in field.get("value", [])), "")
-        elif field["key"] == "question_479dJ5":
-            email = field["value"]
-
-    return shift_start, shift_end, workdays, sleep_issue, email
-
-def generate_sleep_plan(shift_start, shift_end, workdays, sleep_issue):
-    prompt = (
-        f"You are a sleep coach helping someone who works night shift.\n"
-        f"Their shift is from {shift_start} to {shift_end}.\n"
-        f"They work on {', '.join(workdays)}.\n"
-        f"Their biggest sleep problem is: {sleep_issue}.\n"
-        f"Write a detailed, easy-to-follow night shift sleep plan that addresses their problem. "
-        f"Include suggestions for wake/sleep times, environment tips, and how to reset on off days."
-    )
-
-    response = openai.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        max_tokens=800,
-    )
-
-    return response.choices[0].message.content.strip()
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    print("✅ Full incoming JSON:", data)
+
+    fields = data["data"]["fields"]
+    email = None
+    start_time = None
+    end_time = None
+    workdays = []
+    sleep_issues = []
+
+    for field in fields:
+        key = field["key"]
+        value = field["value"]
+        if "email" in key.lower():
+            email = value
+        elif "start" in key.lower():
+            start_time = value
+        elif "end" in key.lower():
+            end_time = value
+        elif "work" in key.lower() and isinstance(value, list):
+            workdays = value
+        elif isinstance(value, list):  # Likely sleep challenge
+            sleep_issues = value
+
+    prompt = f"""
+    Create a personalized sleep plan for a night shift worker.
+
+    Shift starts at: {start_time}
+    Shift ends at: {end_time}
+    Workdays: {workdays}
+    Sleep issues: {sleep_issues}
+
+    Format it as a clear list with section titles and practical advice. 
+    Use language that is warm, clear, and helpful.
+    """
+
+    print("📝 Prompt sent to OpenAI:\n", prompt)
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are a compassionate sleep coach and medical expert."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.7
+    )
+
+    sleep_plan = response["choices"][0]["message"]["content"]
+    print("💤 Sleep Plan:\n", sleep_plan)
+
+    # Save to file so it can be rendered later
+    with open("last_plan.txt", "w") as f:
+        f.write(sleep_plan)
+
+    return redirect(url_for("plan"))
+
 @app.route("/plan")
 def plan():
-    with open("last_plan.txt", "r") as f:
-        sleep_plan = f.read()
+    try:
+        with open("last_plan.txt", "r") as f:
+            sleep_plan = f.read()
+    except FileNotFoundError:
+        sleep_plan = "No plan found yet. Please fill out the form first."
+
     return render_template("plan.html", sleep_plan=sleep_plan)
 
 @app.route("/download-pdf")
 def download_pdf():
-    with open("last_plan.txt", "r") as f:
-        sleep_plan = f.read()
-    html = render_template("plan.html", sleep_plan=sleep_plan)
-    HTML(string=html).write_pdf("/tmp/sleep_plan.pdf")
-    return send_file("/tmp/sleep_plan.pdf", as_attachment=True)
+    try:
+        with open("last_plan.txt", "r") as f:
+            sleep_plan = f.read()
+    except FileNotFoundError:
+        sleep_plan = "No plan found yet. Please fill out the form first."
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    payload = request.get_json()
-    shift_start, shift_end, workdays, sleep_issue, email = extract_info(payload)
+    html = render_template("pdf_template.html", sleep_plan=sleep_plan)
+    pdf = HTML(string=html).write_pdf()
+    
+    with open("sleep_plan.pdf", "wb") as f:
+        f.write(pdf)
 
-    print("📅 Shift:", shift_start, "-", shift_end)
-    print("🗓️ Workdays:", workdays)
-    print("😴 Issue:", sleep_issue)
-    print("📧 Email:", email)
-
-    sleep_plan = generate_sleep_plan(shift_start, shift_end, workdays, sleep_issue)
-
-    with open("last_plan.txt", "w") as f:
-        f.write(sleep_plan)
-
-    print("✅ GPT Response:", sleep_plan[:300], "...")  # Preview
-    return "", 200
+    return redirect(url_for("static", filename="sleep_plan.pdf"))
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=True, host="0.0.0.0", port=port)
+    app.run(debug=True, host="0.0.0.0", port=10000)
