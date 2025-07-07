@@ -1,8 +1,8 @@
 import os
-import json
-from flask import Flask, request, render_template_string, send_file
-from openai import OpenAI
+from flask import Flask, request, render_template, send_file
 from dotenv import load_dotenv
+import openai
+import json
 from datetime import datetime
 from weasyprint import HTML
 
@@ -10,96 +10,84 @@ load_dotenv()
 
 app = Flask(__name__)
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-LANDING_HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>AI Sleep Planner for Night Shift</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            background-color: #0c1e2c;
-            color: #ffffff;
-            text-align: center;
-            padding: 50px;
-        }
-        .container {
-            max-width: 600px;
-            margin: auto;
-            background: #1c3a4d;
-            padding: 30px;
-            border-radius: 10px;
-        }
-        a.button {
-            display: inline-block;
-            background: #00bcd4;
-            color: #fff;
-            padding: 12px 24px;
-            border-radius: 5px;
-            text-decoration: none;
-            margin-top: 20px;
-        }
-        a.button:hover {
-            background: #0097a7;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🛌 AI Sleep Planner</h1>
-        <p>Your personalized sleep plan has been created.</p>
-        <a href="/download" class="button">📥 Download Sleep Plan PDF</a>
-    </div>
-</body>
-</html>
-"""
+def extract_info(payload):
+    shift_start = ""
+    shift_end = ""
+    workdays = []
+    sleep_issue = ""
+    email = ""
+
+    for field in payload["data"]["fields"]:
+        if field["key"] == "question_VPbyQ6":
+            shift_start = field["value"]
+        elif field["key"] == "question_P9by1x":
+            shift_end = field["value"]
+        elif field["key"] == "question_ElZYd2":
+            workdays = [opt["text"] for opt in field.get("options", []) if opt["id"] in field.get("value", [])]
+        elif field["key"] == "question_rOJWaX":
+            sleep_issue = next((opt["text"] for opt in field.get("options", []) if opt["id"] in field.get("value", [])), "")
+        elif field["key"] == "question_479dJ5":
+            email = field["value"]
+
+    return shift_start, shift_end, workdays, sleep_issue, email
+
+def generate_sleep_plan(shift_start, shift_end, workdays, sleep_issue):
+    prompt = (
+        f"You are a sleep coach helping someone who works night shift.\n"
+        f"Their shift is from {shift_start} to {shift_end}.\n"
+        f"They work on {', '.join(workdays)}.\n"
+        f"Their biggest sleep problem is: {sleep_issue}.\n"
+        f"Write a detailed, easy-to-follow night shift sleep plan that addresses their problem. "
+        f"Include suggestions for wake/sleep times, environment tips, and how to reset on off days."
+    )
+
+    response = openai.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=800,
+    )
+
+    return response.choices[0].message.content.strip()
 
 @app.route("/")
-def home():
-    return render_template_string(LANDING_HTML)
+def index():
+    return render_template("index.html")
+
+@app.route("/plan")
+def plan():
+    with open("last_plan.txt", "r") as f:
+        sleep_plan = f.read()
+    return render_template("plan.html", sleep_plan=sleep_plan)
+
+@app.route("/download-pdf")
+def download_pdf():
+    with open("last_plan.txt", "r") as f:
+        sleep_plan = f.read()
+    html = render_template("plan.html", sleep_plan=sleep_plan)
+    HTML(string=html).write_pdf("/tmp/sleep_plan.pdf")
+    return send_file("/tmp/sleep_plan.pdf", as_attachment=True)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.json
-    print("✅ Full incoming JSON:", json.dumps(data, indent=2))
+    payload = request.get_json()
+    shift_start, shift_end, workdays, sleep_issue, email = extract_info(payload)
 
-    try:
-        fields = data["data"]["fields"]
-        shift_start = next(f for f in fields if f["key"] == "question_VPbyQ6")["value"]
-        shift_end = next(f for f in fields if f["key"] == "question_P9by1x")["value"]
-        days_worked = next(f for f in fields if f["key"] == "question_ElZYd2")["value"]
-        sleep_issue = next(f for f in fields if f["key"] == "question_rOJWaX")["options"][0]["text"]
-        email = next(f for f in fields if f["key"] == "question_479dJ5")["value"]
-    except Exception as e:
-        return f"Error parsing fields: {e}", 400
+    print("📅 Shift:", shift_start, "-", shift_end)
+    print("🗓️ Workdays:", workdays)
+    print("😴 Issue:", sleep_issue)
+    print("📧 Email:", email)
 
-    prompt = f"""
-You are a sleep expert. Based on this info, write a 1-page personalized night shift sleep plan:
-- Shift: {shift_start} to {shift_end}
-- Workdays: {days_worked}
-- Sleep issues: {sleep_issue}
-- Email: {email}
-"""
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}]
-    )
+    sleep_plan = generate_sleep_plan(shift_start, shift_end, workdays, sleep_issue)
 
-    sleep_plan_text = response.choices[0].message.content.strip()
+    with open("last_plan.txt", "w") as f:
+        f.write(sleep_plan)
 
-    HTML(string=f"<h1>AI Sleep Plan</h1><p>{sleep_plan_text.replace('\n', '<br>')}</p>").write_pdf("sleep_plan.pdf")
-
-    return "✅ Plan generated and PDF saved.", 200
-
-@app.route("/download")
-def download():
-    if os.path.exists("sleep_plan.pdf"):
-        return send_file("sleep_plan.pdf", as_attachment=True)
-    else:
-        return "❌ No sleep plan PDF found. Submit the form first.", 404
+    print("✅ GPT Response:", sleep_plan[:300], "...")  # Preview
+    return "", 200
 
 if __name__ == "__main__":
-    app.run(debug=True, port=10000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=True, host="0.0.0.0", port=port)
