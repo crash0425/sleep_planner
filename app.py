@@ -1,100 +1,93 @@
 import os
-import json
-from flask import Flask, request, render_template, redirect, url_for, send_file
+from flask import Flask, request, redirect, render_template
 from flask_cors import CORS
 from openai import OpenAI
 from dotenv import load_dotenv
-from weasyprint import HTML
+import json
 
+# Load environment variables from .env
 load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "defaultsecret")
 CORS(app)
 
-openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+LAST_PLAN_FILE = "last_plan.txt"
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-@app.route("/plan")
-def plan():
-    try:
-        with open("last_plan.txt", "r") as f:
-            plan_text = f.read()
-    except FileNotFoundError:
-        plan_text = "No plan found yet. Please fill out the form first."
-    return render_template("plan.html", plan=plan_text)
-
-@app.route("/download")
-def download_pdf():
-    try:
-        with open("last_plan.txt", "r") as f:
-            plan_text = f.read()
-    except FileNotFoundError:
-        plan_text = "No plan found yet."
-
-    rendered = render_template("pdf_template.html", plan=plan_text)
-    HTML(string=rendered).write_pdf("plan.pdf")
-    return send_file("plan.pdf", as_attachment=True)
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.json
+    data = request.get_json()
     print("✅ Full incoming JSON:", json.dumps(data, indent=2))
 
-    fields = data["data"]["fields"]
-    field_map = {f["key"]: f["value"] for f in fields}
+    try:
+        fields = data["data"]["fields"]
+    except KeyError:
+        print("❌ Missing 'fields' in JSON payload.")
+        return "Invalid data", 400
 
-    shift_start = field_map.get("question_VPbyQ6", "Unknown")
-    shift_end = field_map.get("question_P9by1x", "Unknown")
+    # Extract shift start and end
+    shift_start = next((f["value"] for f in fields if f["key"] == "question_VPbyQ6"), None)
+    shift_end = next((f["value"] for f in fields if f["key"] == "question_P9by1x"), None)
 
-    # Workdays parsing
-    weekdays_lookup = {
-        "ebfd0676-3d34-4efa-9eb6-c45329cf313c": "Sunday",
-        "321d03c1-e6a7-4533-aec9-810d289502a3": "Monday",
-        "e64e11d2-c96f-4d99-9609-cdbc4d1ee0a3": "Tuesday",
-        "2e2d5375-c4a7-47eb-a065-216a757ab5fd": "Wednesday",
-        "37cad540-bf00-49c5-b529-30e672a9631b": "Thursday",
-        "a7ddf202-bc5d-4cb4-9f71-ab9fdadf9276": "Friday",
-        "f801558b-89e1-457f-8843-964ef59e3b71": "Saturday"
-    }
+    # Extract workdays
+    workdays_field = next((f for f in fields if f["key"] == "question_ElZYd2"), None)
+    workdays = []
+    if workdays_field:
+        id_to_day = {opt["id"]: opt["text"] for opt in workdays_field.get("options", [])}
+        workdays = [id_to_day[wid] for wid in workdays_field.get("value", []) if wid in id_to_day]
 
-    raw_days = field_map.get("question_ElZYd2", [])
-    workdays = [weekdays_lookup.get(day, day) for day in raw_days]
-    sleep_issues_ids = field_map.get("question_rOJWaX", [])
-    sleep_issues_map = {
-        "ae2dc1d9-16e7-4643-8af2-7349da2fd10a": "Falling asleep",
-        "abc0482e-ddbe-4411-b672-91c12c7e96d5": "Staying asleep",
-        "bc9c0553-5505-4bec-a453-de6cebccf457": "Waking too early",
-        "1e69b4d3-76e7-4a6d-a298-0aca371fcf9a": "All of the above"
-    }
-    sleep_issues = [sleep_issues_map.get(issue, issue) for issue in sleep_issues_ids]
+    # Extract sleep issues
+    issues_field = next((f for f in fields if f["key"] == "question_rOJWaX"), None)
+    sleep_issues = []
+    if issues_field:
+        id_to_issue = {opt["id"]: opt["text"] for opt in issues_field.get("options", [])}
+        sleep_issues = [id_to_issue[iid] for iid in issues_field.get("value", []) if iid in id_to_issue]
 
+    if not (shift_start and shift_end and workdays and sleep_issues):
+        print("❌ Missing required info. Skipping plan generation.")
+        return redirect("/plan")
+
+    # Build prompt
     prompt = f"""
 Create a personalized sleep plan for a night shift worker.
 Shift starts at: {shift_start}
 Shift ends at: {shift_end}
-Workdays: {", ".join(workdays)}
-Sleep issues: {", ".join(sleep_issues)}
+Workdays: {', '.join(workdays)}
+Sleep issues: {', '.join(sleep_issues)}
 Format it as a clear list with section titles and practical advice. 
 Use language that is warm, clear, and helpful.
 """
 
     print("📝 Prompt sent to OpenAI:\n", prompt)
 
-    response = openai.chat.completions.create(
+    response = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
     )
 
     sleep_plan = response.choices[0].message.content.strip()
 
-    with open("last_plan.txt", "w") as f:
+    with open(LAST_PLAN_FILE, "w", encoding="utf-8") as f:
         f.write(sleep_plan)
 
-    return redirect(url_for("plan"))
+    return redirect("/plan")
+
+@app.route("/plan")
+def plan():
+    if not os.path.exists(LAST_PLAN_FILE):
+        return render_template("plan.html", sleep_plan=None)
+    
+    with open(LAST_PLAN_FILE, "r", encoding="utf-8") as f:
+        sleep_plan = f.read()
+
+    return render_template("plan.html", sleep_plan=sleep_plan)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=True, host="0.0.0.0", port=port)
