@@ -2,39 +2,64 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Your Sleep Plan</title>
+    <title>Your Personalized Sleep Plan</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body {
-            font-family: Georgia, serif;
-            max-width: 700px;
-            margin: auto;
+            font-family: Arial, sans-serif;
+            background: #f9f9f9;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 2rem auto;
+            background: #fff;
             padding: 2rem;
-            line-height: 1.6;
+            border-radius: 12px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
         }
         h1 {
             text-align: center;
+            color: #2c3e50;
             margin-bottom: 2rem;
         }
-        .download {
-            text-align: center;
-            margin-top: 2rem;
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            line-height: 1.6;
+            font-size: 1rem;
+            background: #f4f4f4;
+            padding: 1rem;
+            border-radius: 8px;
         }
-        .download a {
-            display: inline-block;
-            background-color: #007BFF;
+        .btn {
+            display: block;
+            width: max-content;
+            margin: 2rem auto 0;
+            padding: 0.75rem 1.5rem;
+            background-color: #3498db;
             color: white;
-            padding: 0.8rem 1.5rem;
             text-decoration: none;
-            border-radius: 4px;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: background-color 0.3s;
+        }
+        .btn:hover {
+            background-color: #2980b9;
         }
     </style>
 </head>
 <body>
-    <h1>Your Personalized Sleep Plan</h1>
-    <div>{{ sleep_plan | safe }}</div>
-
-    <div class="download">
-        <a href="/download-pdf">📄 Download as PDF</a>
+    <div class="container">
+        <h1>Your Personalized Sleep Plan</h1>
+        {% if plan %}
+            <pre>{{ plan }}</pre>
+            <a class="btn" href="/download-pdf">📄 Download as PDF</a>
+        {% else %}
+            <p>No plan found yet. Please fill out the form first.</p>
+        {% endif %}
     </div>
 </body>
 </html>
