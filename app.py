@@ -1,36 +1,48 @@
 import os
-from flask import Flask, request, render_template, send_file
-from flask_cors import CORS
-import openai
 import json
-import traceback
+import openai
+from flask import Flask, request, render_template, send_file, redirect
+from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
-PORT = int(os.environ.get("PORT", 10000))
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+tally_webhook_secret = os.environ.get("TALLY_SECRET")
 
+# Ensure the plans directory exists
+if not os.path.exists("plans"):
+    os.makedirs("plans")
 
 @app.route("/")
-def home():
+def index():
     return render_template("index.html")
 
-
 @app.route("/plan")
-def plan():
-    email = request.args.get("email", "").strip().lower()
+def view_plan():
+    email = request.args.get("email")
     if not email:
-        return render_template("plan.html", plan="No email provided.")
+        return render_template("plan.html", email=None, plan=None)
 
-    file_path = f"plans/{email}.txt"
-    if not os.path.exists(file_path):
-        return render_template("plan.html", plan="No plan found yet. Please fill out the form first.")
-    
-    with open(file_path, "r", encoding="utf-8") as f:
-        plan_text = f.read()
-    return render_template("plan.html", plan=plan_text)
+    filepath = f"plans/{email}.txt"
+    if os.path.exists(filepath):
+        with open(filepath, "r") as f:
+            plan = f.read()
+        return render_template("plan.html", email=email, plan=plan)
+    else:
+        return render_template("plan.html", email=email, plan=None)
 
+@app.route("/plan/download")
+def download_plan():
+    email = request.args.get("email")
+    if not email:
+        return "Email is required to download the plan.", 400
+
+    filepath = f"plans/{email}.txt"
+    if not os.path.exists(filepath):
+        return "Plan not found.", 404
+
+    return send_file(filepath, as_attachment=True, download_name=f"{email}_sleep_plan.txt")
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -45,30 +57,38 @@ def webhook():
         workdays = []
         sleep_issues = ""
 
+        # Parse fields from form
         for field in fields:
-            key = field.get("key", "").lower()
-            label = field.get("label", "").lower()
+            key = field["key"]
             value = field.get("value")
 
-            if "email" in key or "email" in label:
-                email = value.strip().lower()
-                print("📧 Email extracted:", email)
-
-            elif "start your shift" in label:
+            if key == "question_479dJ5":
+                email = value
+            elif key == "question_VPbyQ6":
                 shift_start = value
-
-            elif "end" in label:
+            elif key == "question_P9by1x":
                 shift_end = value
+            elif key == "question_ElZYd2" and isinstance(value, list):
+                options = field.get("options", [])
+                workdays = [opt["text"] for opt in options if opt["id"] in value]
+            elif key == "question_rOJWaX":
+                selected_ids = value
+                options = field.get("options", [])
+                for opt in options:
+                    if opt["id"] in selected_ids:
+                        sleep_issues = opt["text"]
 
-            elif "what days of the week" in label and isinstance(value, list):
-                day_map = {opt["id"]: opt["text"] for opt in field.get("options", [])}
-                workdays = [day_map.get(v, v) for v in value]
+        print(f"📧 Email extracted: {email}")
+        print(f"🕒 Shift: {shift_start} to {shift_end}")
+        print(f"📆 Workdays: {', '.join(workdays)}")
+        print(f"💤 Sleep Issues: {sleep_issues}")
 
-            elif "sleep challenge" in label and isinstance(value, list):
-                for option in field.get("options", []):
-                    if option["id"] == value[0]:
-                        sleep_issues = option["text"]
+        # Ensure required info exists
+        if not email:
+            print("❌ No email found. Aborting.")
+            return "Missing email.", 400
 
+        # Create prompt for OpenAI
         prompt = f"""
 Create a personalized sleep plan for a night shift worker.
 Shift starts at: {shift_start}
@@ -80,31 +100,33 @@ Use language that is warm, clear, and helpful.
 """
         print("📝 Prompt sent to OpenAI:\n", prompt)
 
+        # Call OpenAI
         response = openai.ChatCompletion.create(
             model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a helpful sleep coach."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=1000,
-            temperature=0.7
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
         )
 
-        result = response["choices"][0]["message"]["content"]
-        print("✅ Sleep plan generated.")
+        plan = response.choices[0].message.content
 
-        os.makedirs("plans", exist_ok=True)
-        if email:
-            with open(f"plans/{email}.txt", "w", encoding="utf-8") as f:
-                f.write(result)
+        # Save plan
+        plan_path = f"plans/{email}.txt"
+        print(f"💾 Saving plan to: {plan_path}")
+        try:
+            with open(plan_path, "w") as f:
+                f.write(plan)
+        except Exception as e:
+            print(f"❌ Error saving plan: {e}")
+            return "Error saving plan.", 500
 
-        return "", 302, {"Location": f"/plan?email={email}"}
+        # Redirect user
+        return redirect(f"/plan?email={email}")
 
     except Exception as e:
-        print("❌ Error in webhook:", str(e))
-        traceback.print_exc()
-        return "Error processing form", 500
+        print("❌ Webhook error:", e)
+        return "Internal error", 500
 
-
+# For Render.com compatibility
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, debug=True)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=True)
