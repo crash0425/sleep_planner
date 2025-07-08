@@ -1,54 +1,45 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Your Personalized Sleep Plan</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 800px;
-      margin: 40px auto;
-      background: #f9f9f9;
-      padding: 30px;
-      border-radius: 10px;
-      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-    }
-    h1 {
-      text-align: center;
-      color: #2c3e50;
-    }
-    h2 {
-      color: #34495e;
-      margin-top: 30px;
-    }
-    p {
-      line-height: 1.6;
-      margin-bottom: 20px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>Your Personalized Sleep Plan</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        h2 {
+            color: #34495e;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+        }
+        p {
+            margin-bottom: 10px;
+        }
+        .section {
+            margin-bottom: 25px;
+        }
+    </style>
 </head>
 <body>
-  <h1>Your Personalized Sleep Plan</h1>
-
-  <h2>1. Sleep Timing</h2>
-  <p>It's important to maintain a regular sleep schedule, even on your days off. From Wednesday to Saturday, when you work, try to sleep as soon as possible after your shift ends. Aim to be in bed by 13:00 and get 7–9 hours of sleep, waking around 20:00–22:00.</p>
-  <p>On your days off (Sunday–Tuesday), try to stay up late (around 04:00) and sleep in until noon or later. This keeps your body in sync with night shift rhythm.</p>
-
-  <h2>2. Sleep Environment</h2>
-  <p>Create a dark, quiet, and cool space. Use blackout curtains, earplugs, a sleep mask, or white noise. Keep the room 60–67°F and avoid screens for 30 minutes before bed.</p>
-
-  <h2>3. Nutrition and Hydration</h2>
-  <p>Avoid caffeine and alcohol near bedtime. Eat a light snack if needed, but skip heavy meals before bed.</p>
-
-  <h2>4. Exercise</h2>
-  <p>Exercise helps you sleep better — just avoid it within 3 hours of bedtime.</p>
-
-  <h2>5. Resetting on Off Days</h2>
-  <p>If you want more daytime hours on off days, shift your schedule gradually by 1–2 hours earlier each day to help your body adjust.</p>
-
-  <h2>6. Consult a Professional</h2>
-  <p>If sleep problems persist, see a sleep specialist. Cognitive Behavioral Therapy for Insomnia (CBT-I) is proven to help.</p>
-
-  <p style="margin-top: 40px;"><strong>Remember:</strong> Quality sleep is essential to your health — especially on night shifts!</p>
+    <h1>Your Personalized Night Shift Sleep Plan</h1>
+    <div class="section">
+        {% for line in plan_text.split('\n') %}
+            {% if line.startswith("###") %}
+                <h2>{{ line[3:].strip() }}</h2>
+            {% elif line.startswith("-") %}
+                <p>• {{ line[1:].strip() }}</p>
+            {% elif line.strip() == "" %}
+                <br>
+            {% else %}
+                <p>{{ line.strip() }}</p>
+            {% endif %}
+        {% endfor %}
+    </div>
 </body>
 </html>
