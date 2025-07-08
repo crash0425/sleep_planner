@@ -14,8 +14,20 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "defaultsecret")
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Store plans by email in-memory (optional: use a database or file for persistence)
-plans = {}
+PLAN_DIR = "plans"
+os.makedirs(PLAN_DIR, exist_ok=True)
+
+def save_plan(email, content):
+    path = os.path.join(PLAN_DIR, f"{email}.txt")
+    with open(path, "w") as f:
+        f.write(content)
+
+def load_plan(email):
+    path = os.path.join(PLAN_DIR, f"{email}.txt")
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return f.read()
+    return None
 
 @app.route("/")
 def index():
@@ -24,7 +36,7 @@ def index():
 @app.route("/plan")
 def show_plan():
     email = request.args.get("email", "").strip()
-    plan = plans.get(email)
+    plan = load_plan(email)
 
     if not email:
         message = "No email provided."
@@ -47,7 +59,6 @@ def webhook():
 
     form_data = {field["key"]: field for field in fields}
 
-    # Extract values
     shift_start = form_data.get("question_VPbyQ6", {}).get("value", "")
     shift_end = form_data.get("question_P9by1x", {}).get("value", "")
     work_days = [
@@ -64,7 +75,6 @@ def webhook():
     if not email:
         return "Email is required", 400
 
-    # Build prompt
     prompt = f"""
 Create a personalized sleep plan for a night shift worker.
 Shift starts at: {shift_start or 'Unknown'}
@@ -77,7 +87,6 @@ Use language that is warm, clear, and helpful.
 
     print("📝 Prompt sent to OpenAI:\n", prompt)
 
-    # Call OpenAI
     try:
         chat_response = client.chat.completions.create(
             model="gpt-4",
@@ -92,10 +101,8 @@ Use language that is warm, clear, and helpful.
         print("❌ OpenAI error:", str(e))
         return "Failed to generate sleep plan", 500
 
-    # Store the plan
-    plans[email] = plan_text
-    print("✅ Sleep plan saved for", email)
-
+    save_plan(email, plan_text)
+    print(f"✅ Sleep plan saved to file for {email}")
     return redirect(url_for("show_plan", email=email))
 
 if __name__ == "__main__":
