@@ -1,110 +1,95 @@
 import os
-from flask import Flask, request, render_template, redirect, url_for
-from flask_cors import CORS
-from openai import OpenAI
-from dotenv import load_dotenv
-from datetime import datetime
 import json
+from flask import Flask, request, redirect, render_template
+from flask_cors import CORS
+from dotenv import load_dotenv
+import openai
 
 load_dotenv()
-
 app = Flask(__name__)
 CORS(app)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "defaultsecret")
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-PLAN_DIR = "plans"
-os.makedirs(PLAN_DIR, exist_ok=True)
-
-def save_plan(email, content):
-    path = os.path.join(PLAN_DIR, f"{email}.txt")
-    with open(path, "w") as f:
-        f.write(content)
-
-def load_plan(email):
-    path = os.path.join(PLAN_DIR, f"{email}.txt")
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return f.read()
-    return None
+PLANS_DIR = "plans"
+os.makedirs(PLANS_DIR, exist_ok=True)
 
 @app.route("/")
-def index():
+def home():
     return render_template("index.html")
 
 @app.route("/plan")
-def show_plan():
-    email = request.args.get("email", "").strip()
-    plan = load_plan(email)
-
+def plan():
+    email = request.args.get("email")
     if not email:
-        message = "No email provided."
-    elif not plan:
-        message = "No plan found yet. Please fill out the form first."
-    else:
-        message = None
+        return render_template("plan.html", plan=None, email=None)
 
-    return render_template("plan.html", email=email, plan=plan, message=message)
+    safe_email = email.replace("@", "_at_").replace(".", "_")
+    plan_path = os.path.join(PLANS_DIR, f"{safe_email}.txt")
+
+    if os.path.exists(plan_path):
+        with open(plan_path, "r") as f:
+            plan = f.read()
+        return render_template("plan.html", plan=plan, email=email)
+    else:
+        return render_template("plan.html", plan=None, email=email)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
+    data = request.json
     print("✅ Full incoming JSON:", json.dumps(data, indent=2))
 
-    try:
-        fields = data["data"]["fields"]
-    except (KeyError, TypeError):
-        return "Invalid payload", 400
+    email = None
+    shift_start = None
+    shift_end = None
+    workdays = []
+    sleep_issues = []
 
-    form_data = {field["key"]: field for field in fields}
+    fields = data.get("data", {}).get("fields", [])
+    for field in fields:
+        label = field.get("label", "").lower()
+        if field["type"] == "INPUT_EMAIL":
+            email = field.get("value")
+        elif "start" in label:
+            shift_start = field.get("value")
+        elif "end" in label:
+            shift_end = field.get("value")
+        elif field["type"] == "CHECKBOXES" and "days" in label:
+            for option in field.get("options", []):
+                if option.get("id") in field.get("value", []):
+                    workdays.append(option.get("text"))
+        elif field["type"] == "MULTIPLE_CHOICE":
+            for option in field.get("options", []):
+                if option.get("id") in field.get("value", []):
+                    sleep_issues.append(option.get("text"))
 
-    shift_start = form_data.get("question_VPbyQ6", {}).get("value", "")
-    shift_end = form_data.get("question_P9by1x", {}).get("value", "")
-    work_days = [
-        opt["text"] for opt in form_data.get("question_ElZYd2", {}).get("options", [])
-        if opt["id"] in form_data.get("question_ElZYd2", {}).get("value", [])
-    ]
-    sleep_issues = [
-        opt["text"] for opt in form_data.get("question_rOJWaX", {}).get("options", [])
-        if opt["id"] in form_data.get("question_rOJWaX", {}).get("value", [])
-    ]
-    email = form_data.get("question_479dJ5", {}).get("value", "").strip()
-    print("📧 Email extracted:", email)
+    print(f"📧 Email extracted: {email}")
+    print(f"📝 Prompt data -> start: {shift_start}, end: {shift_end}, workdays: {workdays}, issues: {sleep_issues}")
 
     if not email:
-        return "Email is required", 400
+        return "No email provided.", 400
 
+    # Build the prompt
     prompt = f"""
 Create a personalized sleep plan for a night shift worker.
-Shift starts at: {shift_start or 'Unknown'}
-Shift ends at: {shift_end or 'Unknown'}
-Workdays: {', '.join(work_days) if work_days else 'Not specified'}
-Sleep issues: {', '.join(sleep_issues) if sleep_issues else 'Not specified'}
+Shift starts at: {shift_start}
+Shift ends at: {shift_end}
+Workdays: {', '.join(workdays)}
+Sleep issues: {', '.join(sleep_issues)}
 Format it as a clear list with section titles and practical advice. 
 Use language that is warm, clear, and helpful.
 """
 
-    print("📝 Prompt sent to OpenAI:\n", prompt)
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    plan_text = response["choices"][0]["message"]["content"]
 
-    try:
-        chat_response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a compassionate sleep coach."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
-        )
-        plan_text = chat_response.choices[0].message.content
-    except Exception as e:
-        print("❌ OpenAI error:", str(e))
-        return "Failed to generate sleep plan", 500
+    # Save plan to a user-specific file
+    safe_email = email.replace("@", "_at_").replace(".", "_")
+    plan_path = os.path.join(PLANS_DIR, f"{safe_email}.txt")
+    with open(plan_path, "w") as f:
+        f.write(plan_text)
 
-    save_plan(email, plan_text)
-    print(f"✅ Sleep plan saved to file for {email}")
-    return redirect(url_for("show_plan", email=email))
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    return redirect(f"/plan?email={email}")
