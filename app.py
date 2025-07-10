@@ -1,88 +1,92 @@
 import os
-from flask import Flask, request, render_template, redirect
-from dotenv import load_dotenv
+from flask import Flask, request, render_template, redirect, url_for
 import openai
 import json
-
-# Load environment variables
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+import traceback
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "fallback-secret-key")
 
-# Make sure the plans folder exists
-os.makedirs("plans", exist_ok=True)
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+
+# Make sure this folder exists
+PLANS_DIR = "plans"
+os.makedirs(PLANS_DIR, exist_ok=True)
 
 @app.route("/")
-def index():
+def home():
     return render_template("index.html")
 
 @app.route("/plan")
 def show_plan():
-    email = request.args.get("email", "").lower()
-    filename = os.path.join("plans", f"{email}.txt")
+    email = request.args.get("email")
+    if not email:
+        return "Missing email", 400
 
-    if os.path.exists(filename):
-        with open(filename, "r") as f:
-            plan = f.read()
-        return render_template("plan.html", plan=plan, email=email)
-    else:
-        return render_template("plan.html", plan=None, email=email)
+    plan_path = os.path.join(PLANS_DIR, f"{email}.txt")
+    if not os.path.exists(plan_path):
+        return render_template("plan.html", plan=None)
+
+    with open(plan_path, "r") as f:
+        plan = f.read()
+    return render_template("plan.html", plan=plan)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.json
-        print("✅ Full incoming JSON:", json.dumps(data, indent=2))
+        payload = request.get_json()
+        print("✅ Full incoming JSON:", json.dumps(payload, indent=2))
 
-        fields = data["data"]["fields"]
+        fields = payload["data"]["fields"]
 
-        # Extract relevant values
-        shift_start = next(f["value"] for f in fields if f["key"] == "question_VPbyQ6")
-        shift_end = next(f["value"] for f in fields if f["key"] == "question_P9by1x")
-        workdays_ids = next(f["value"] for f in fields if f["key"] == "question_ElZYd2")
-        workdays_options = next(f["options"] for f in fields if f["key"] == "question_ElZYd2")
-        sleep_issue_ids = next(f["value"] for f in fields if f["key"] == "question_rOJWaX")
-        sleep_issue_options = next(f["options"] for f in fields if f["key"] == "question_rOJWaX")
-        email = next(f["value"] for f in fields if f["key"] == "question_479dJ5").lower()
+        # Print all field keys and values for debugging
+        for f in fields:
+            print(f"Key: {f['key']}, Value: {f.get('value')}")
 
-        # Convert IDs to labels
-        workdays = [opt["text"] for opt in workdays_options if opt["id"] in workdays_ids]
-        sleep_issues = [opt["text"] for opt in sleep_issue_options if opt["id"] in sleep_issue_ids]
+        # Extract values
+        email = next(f for f in fields if f["key"] == "question_479dJ5")["value"]
+        shift_start = next(f for f in fields if f["key"] == "question_VPbyQ6")["value"]
+        shift_end = next(f for f in fields if f["key"] == "question_P9by1x")["value"]
+        workdays = next(f for f in fields if f["key"] == "question_ElZYd2")["options"]
+        sleep_issues = next(f for f in fields if f["key"] == "question_rOJWaX")["options"]
 
+        workdays_text = ", ".join([d["text"] for d in workdays])
+        sleep_issues_text = ", ".join([s["text"] for s in sleep_issues])
+
+        # Build prompt
         prompt = f"""
-        Create a personalized sleep plan for a night shift worker.
-        Shift starts at: {shift_start}
-        Shift ends at: {shift_end}
-        Workdays: {', '.join(workdays)}
-        Sleep issues: {', '.join(sleep_issues)}
-        Format it as a clear list with section titles and practical advice. 
-        Use language that is warm, clear, and helpful.
-        """
+Create a personalized sleep plan for a night shift worker.
+Shift starts at: {shift_start}
+Shift ends at: {shift_end}
+Workdays: {workdays_text}
+Sleep issues: {sleep_issues_text}
+Format it as a clear list with section titles and practical advice.
+Use language that is warm, clear, and helpful.
+"""
 
-        print(f"📧 Email extracted: {email}")
-        print(f"📝 Prompt sent to OpenAI:\n{prompt.strip()}")
+        print("📝 Prompt sent to OpenAI:\n", prompt)
 
-        # Chat completion
+        # Call OpenAI
         response = openai.ChatCompletion.create(
             model="gpt-4",
-            messages=[{"role": "user", "content": prompt}]
+            messages=[
+                {"role": "system", "content": "You are a sleep coach who helps night shift workers."},
+                {"role": "user", "content": prompt}
+            ]
         )
-        plan_text = response.choices[0].message.content.strip()
 
-        # Save plan to file
-        filepath = os.path.join("plans", f"{email}.txt")
-        with open(filepath, "w") as f:
+        plan_text = response.choices[0].message["content"]
+
+        # Save to file
+        with open(os.path.join(PLANS_DIR, f"{email}.txt"), "w") as f:
             f.write(plan_text)
-        print(f"✅ Sleep plan saved to: {filepath}")
 
+        print(f"✅ Plan saved for {email}")
         return redirect(f"/plan?email={email}")
 
     except Exception as e:
         print("❌ Webhook error:", str(e))
+        traceback.print_exc()
         return "Error", 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(debug=True, port=10000)
