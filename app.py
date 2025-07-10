@@ -1,95 +1,103 @@
 import os
-import json
+import openai
 from flask import Flask, request, render_template, redirect
-from flask_cors import CORS
-from openai import OpenAI
 from dotenv import load_dotenv
 
-# Load .env if running locally
 load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 app = Flask(__name__)
-CORS(app)
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-PLAN_FOLDER = "plans"
-os.makedirs(PLAN_FOLDER, exist_ok=True)
+# Ensure plans directory exists
+PLANS_DIR = "plans"
+os.makedirs(PLANS_DIR, exist_ok=True)
+
+def extract_field(fields, key, fallback=""):
+    for field in fields:
+        if field.get("key") == key:
+            return field.get("value", fallback)
+    return fallback
 
 @app.route("/")
-def home():
+def index():
     return render_template("index.html")
 
 @app.route("/plan")
 def plan():
-    email = request.args.get("email", "").strip().lower()
+    email = request.args.get("email", "").lower()
     if not email:
-        return "No email provided.", 400
+        return render_template("plan.html", plan="No email provided.")
 
-    filename = os.path.join(PLAN_FOLDER, f"{email}.txt")
-    if os.path.exists(filename):
-        with open(filename, "r") as f:
-            plan_text = f.read()
-        return render_template("plan.html", email=email, plan=plan_text)
-    else:
-        return render_template("plan.html", email=email, plan=None)
+    plan_path = os.path.join(PLANS_DIR, f"{email}.txt")
+    if not os.path.exists(plan_path):
+        return render_template("plan.html", plan="No plan found yet. Please fill out the form first.")
+
+    with open(plan_path, "r", encoding="utf-8") as f:
+        plan = f.read()
+
+    return render_template("plan.html", plan=plan)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json()
-        print("✅ Full incoming JSON:", json.dumps(data, indent=2))
+        data = request.json.get("data", {})
+        fields = data.get("fields", [])
 
-        # Extract form fields
-        fields = data["data"]["fields"]
-        field_map = {field["key"]: field for field in fields}
+        start_time = extract_field(fields, "question_VPbyQ6")
+        end_time = extract_field(fields, "question_P9by1x")
+        workdays_ids = extract_field(fields, "question_ElZYd2", [])
+        sleep_issue_ids = extract_field(fields, "question_rOJWaX", [])
+        email = extract_field(fields, "question_479dJ5").lower()
 
-        start = field_map["question_VPbyQ6"]["value"]
-        end = field_map["question_P9by1x"]["value"]
-        days_raw = field_map["question_ElZYd2"]["options"]
-        selected_ids = field_map["question_ElZYd2"]["value"]
-        issue_id = field_map["question_rOJWaX"]["value"][0]
-        email = field_map["question_479dJ5"]["value"].strip().lower()
+        # Extract workday/sleep issue text from options
+        workday_text = []
+        sleep_issue_text = []
 
-        days = [d["text"] for d in days_raw if d["id"] in selected_ids]
-        issue_text = next((i["text"] for i in field_map["question_rOJWaX"]["options"] if i["id"] == issue_id), "N/A")
+        for field in fields:
+            if field.get("key") == "question_ElZYd2":
+                id_to_text = {opt["id"]: opt["text"] for opt in field.get("options", [])}
+                workday_text = [id_to_text.get(i, i) for i in workdays_ids]
 
-        print("📧 Email extracted:", email)
+            if field.get("key") == "question_rOJWaX":
+                id_to_text = {opt["id"]: opt["text"] for opt in field.get("options", [])}
+                sleep_issue_text = [id_to_text.get(i, i) for i in sleep_issue_ids]
 
-        prompt = (
-            f"Create a personalized sleep plan for a night shift worker.\n"
-            f"Shift starts at: {start}\n"
-            f"Shift ends at: {end}\n"
-            f"Workdays: {', '.join(days)}\n"
-            f"Sleep issues: {issue_text}\n"
-            f"Format it as a clear list with section titles and practical advice. "
-            f"Use language that is warm, clear, and helpful."
-        )
+        # Build the prompt
+        prompt = f"""
+Create a personalized sleep plan for a night shift worker.
+Shift starts at: {start_time}
+Shift ends at: {end_time}
+Workdays: {', '.join(workday_text)}
+Sleep issues: {', '.join(sleep_issue_text)}
+Format it as a clear list with section titles and practical advice. 
+Use language that is warm, clear, and helpful.
+"""
 
-        print("📝 Prompt sent to OpenAI:\n", prompt)
+        print(f"📧 Email extracted: {email}")
+        print(f"📝 Prompt sent to OpenAI:\n{prompt.strip()}")
 
-        response = client.chat.completions.create(
+        # Call OpenAI
+        response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are a helpful sleep coach."},
+                {"role": "system", "content": "You are a helpful sleep coach for shift workers."},
                 {"role": "user", "content": prompt}
             ]
         )
 
-        plan_text = response.choices[0].message.content.strip()
+        sleep_plan = response.choices[0].message.content.strip()
 
-        # Save the plan
-        filename = os.path.join(PLAN_FOLDER, f"{email}.txt")
-        with open(filename, "w") as f:
-            f.write(plan_text)
+        # Save plan
+        plan_path = os.path.join(PLANS_DIR, f"{email}.txt")
+        with open(plan_path, "w", encoding="utf-8") as f:
+            f.write(sleep_plan)
 
-        print("✅ Plan saved:", filename)
-        return redirect(f"/plan?email={email}")
+        print(f"✅ Sleep plan saved to: {plan_path}")
+        return redirect(f"/plan?email={email}", code=302)
 
     except Exception as e:
-        print("❌ Webhook error:\n", e)
-        return "Internal server error", 500
+        print("❌ Webhook error:", str(e))
+        return "Webhook error", 500
 
-# Optional: Debug endpoint to see saved plans
-@app.route("/debug-files")
-def debug_files():
-    return "<br>".join(os.listdir(PLAN_FOLDER))
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=10000)
